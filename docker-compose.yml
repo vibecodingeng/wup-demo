@@ -1,0 +1,73 @@
+services:
+  # Infrastructure
+  nats:
+    image: nats:latest
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    command: ["-js"]
+
+  redis:
+    image: redis:latest
+    ports:
+      - "6379:6379"
+    volumes:
+      - ./data/redis:/data
+
+  # Application Services
+  event_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BIN_NAME: event_service
+    ports:
+      - "8081:8081"
+      - "9092:9092"
+    environment:
+      - REDIS_URL=redis://redis:6379
+      - HTTP_PORT=8081
+      - METRICS_PORT=9092
+      - REFRESH_INTERVAL_SECS=60
+      - RUST_LOG=info
+    depends_on:
+      - redis
+
+  aggregator:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BIN_NAME: aggregator
+    ports:
+      - "9090:9090"
+    environment:
+      - NATS_URL=nats://nats:4222
+      - REDIS_URL=redis://redis:6379
+      - METRICS_PORT=9090
+      - RUST_LOG=info
+      # - EVENT_SLUG=your-event-slug
+    depends_on:
+      - nats
+      - redis
+      - event_service
+
+  orderbook_service:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        BIN_NAME: orderbook_service
+    ports:
+      - "8080:8080"
+      - "9091:9091"
+    environment:
+      - NATS_URL=nats://nats:4222
+      - REDIS_URL=redis://redis:6379
+      - HTTP_PORT=8080
+      - METRICS_PORT=9091
+      - NATS_SUBJECT=normalized.polymarket.>
+      - RUST_LOG=info
+    depends_on:
+      - nats
+      - redis

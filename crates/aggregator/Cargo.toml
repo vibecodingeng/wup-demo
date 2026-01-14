@@ -1,0 +1,29 @@
+[package]
+name = "aggregator"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "aggregator"
+path = "src/main.rs"
+
+[dependencies]
+common = { workspace = true }
+nats_client = { workspace = true }
+polymarket = { workspace = true }
+normalizer = { workspace = true }
+external_services = { workspace = true }
+redis = { workspace = true }
+tokio = { workspace = true }
+futures = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+async-nats = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+dotenvy = { workspace = true }

@@ -1,0 +1,82 @@
+[workspace]
+resolver = "2"
+members = [
+  "crates/common",
+  "crates/nats_client",
+  "crates/polymarket",
+  "crates/normalizer",
+  "crates/aggregator",
+  "crates/orderbook_service",
+  "crates/external_services",
+  "crates/event_service",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+
+[workspace.dependencies]
+# Async runtime
+tokio = { version = "1.43", features = ["full"] }
+tokio-tungstenite = { version = "0.24", features = ["rustls-tls-native-roots"] }
+futures = "0.3"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# NATS
+async-nats = "0.38"
+
+# Error handling
+thiserror = "2.0"
+anyhow = "1.0"
+
+# Logging & Tracing
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# Metrics
+metrics = "0.24"
+metrics-exporter-prometheus = "0.16"
+
+# Async trait
+async-trait = "0.1"
+
+# Bytes
+bytes = "1.11"
+
+# URL parsing
+url = "2.5"
+
+# Time
+chrono = { version = "0.4", features = ["serde"] }
+
+# HTTP server
+axum = "0.8"
+tower-http = { version = "0.6", features = ["cors", "trace"] }
+
+# Lock-free data structures
+dashmap = "6.1"
+
+# Decimal arithmetic
+rust_decimal = { version = "1.36", features = ["serde"] }
+
+# HTTP client
+reqwest = { version = "0.12", features = ["json"] }
+
+# Redis
+redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
+
+# Environment
+dotenvy = "0.15"
+
+# Internal crates
+common = { path = "crates/common" }
+nats_client = { path = "crates/nats_client" }
+polymarket = { path = "crates/polymarket" }
+normalizer = { path = "crates/normalizer" }
+orderbook_service = { path = "crates/orderbook_service" }
+external_services = { path = "crates/external_services" }
+event_service = { path = "crates/event_service" }

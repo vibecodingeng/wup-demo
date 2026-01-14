@@ -1,0 +1,57 @@
+[package]
+name = "orderbook_service"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "orderbook_service"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+nats_client = { workspace = true }
+normalizer = { workspace = true }
+external_services = { workspace = true }
+
+# Redis
+redis = { workspace = true }
+
+# Async runtime
+tokio = { workspace = true }
+futures = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging & Tracing
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Metrics
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+
+# NATS
+async-nats = { workspace = true }
+
+# HTTP server
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# Lock-free data structures
+dashmap = { workspace = true }
+
+# Decimal arithmetic
+rust_decimal = { workspace = true }
+
+# Time
+chrono = { workspace = true }
+
+# Hashing
+sha2 = "0.10"
