@@ -2,6 +2,7 @@
 
 use crate::store::{MarketMetadata, OrderbookStore};
 use anyhow::Result;
+use chrono::Utc;
 use external_services::SharedRedisClient;
 use futures::StreamExt;
 use metrics::{counter, gauge};
@@ -21,6 +22,8 @@ pub struct OrderbookServiceConfig {
     pub metrics_interval_secs: u64,
     /// Redis URL for fetching market metadata.
     pub redis_url: Option<String>,
+    /// Enable publishing orderbook changes to NATS for gateway consumption.
+    pub publish_changes: bool,
 }
 
 impl Default for OrderbookServiceConfig {
@@ -29,6 +32,7 @@ impl Default for OrderbookServiceConfig {
             subject: "normalized.polymarket.>".to_string(),
             metrics_interval_secs: 5,
             redis_url: None,
+            publish_changes: false,
         }
     }
 }
@@ -206,6 +210,13 @@ impl OrderbookService {
         // Apply to store (lock-free)
         self.store.apply(&normalized);
 
+        // Publish change to NATS for gateway consumption (if enabled)
+        if self.config.publish_changes {
+            if let Err(e) = self.publish_change(&normalized, &hashed_market_id).await {
+                warn!("Failed to publish change: {:?}", e);
+            }
+        }
+
         // Update message type counter
         let message_type = match normalized.message_type {
             normalizer::schema::OrderbookMessageType::Snapshot => "snapshot",
@@ -216,6 +227,133 @@ impl OrderbookService {
             "message_type" => message_type
         )
         .increment(1);
+
+        Ok(())
+    }
+
+    /// Publish aggregated price change event to NATS for gateway consumption.
+    /// Fetches the current aggregated state for each changed price level.
+    async fn publish_change(
+        &self,
+        msg: &NormalizedOrderbook,
+        hashed_market_id: &str,
+    ) -> Result<()> {
+        use normalizer::schema::{
+            AggregatedPriceChangeEvent, AggregatedPriceLevelChange, OrderSide, PlatformEntry,
+        };
+
+        // The aggregate_id is the hashed_market_id when using legacy apply
+        let aggregate_id = hashed_market_id;
+
+        // Collect affected prices with their side
+        let mut affected_prices: Vec<(String, OrderSide)> = Vec::new();
+
+        match msg.message_type {
+            normalizer::schema::OrderbookMessageType::Snapshot => {
+                // For snapshots, all bid/ask prices in the message are affected
+                if let Some(bids) = &msg.bids {
+                    for level in bids {
+                        affected_prices.push((level.price.clone(), OrderSide::Buy));
+                    }
+                }
+                if let Some(asks) = &msg.asks {
+                    for level in asks {
+                        affected_prices.push((level.price.clone(), OrderSide::Sell));
+                    }
+                }
+            }
+            normalizer::schema::OrderbookMessageType::Delta => {
+                // For deltas, only the updated prices are affected
+                if let Some(updates) = &msg.updates {
+                    for update in updates {
+                        let side = match update.side {
+                            normalizer::schema::Side::Buy => OrderSide::Buy,
+                            normalizer::schema::Side::Sell => OrderSide::Sell,
+                        };
+                        affected_prices.push((update.price.clone(), side));
+                    }
+                }
+            }
+        }
+
+        // Build aggregated changes by fetching current state for each affected price
+        let mut changes: Vec<AggregatedPriceLevelChange> = Vec::new();
+
+        for (price, side) in affected_prices {
+            // Fetch the current aggregated state at this price
+            let level = match side {
+                OrderSide::Buy => self.store.get_aggregated_bid_level(
+                    aggregate_id,
+                    hashed_market_id,
+                    &msg.clob_token_id,
+                    &price,
+                ),
+                OrderSide::Sell => self.store.get_aggregated_ask_level(
+                    aggregate_id,
+                    hashed_market_id,
+                    &msg.clob_token_id,
+                    &price,
+                ),
+            };
+
+            // If level exists (has liquidity), include it in changes
+            // If level doesn't exist (was removed), send empty with zero total_size
+            let change = match level {
+                Some(agg_level) => AggregatedPriceLevelChange {
+                    price: agg_level.price,
+                    side,
+                    total_size: agg_level.total_size,
+                    platforms: agg_level
+                        .platforms
+                        .into_iter()
+                        .map(|p| PlatformEntry {
+                            platform: p.platform,
+                            size: p.size,
+                        })
+                        .collect(),
+                },
+                None => {
+                    // Price level was removed (all orders cleared)
+                    AggregatedPriceLevelChange {
+                        price,
+                        side,
+                        total_size: "0".to_string(),
+                        platforms: vec![],
+                    }
+                }
+            };
+
+            changes.push(change);
+        }
+
+        // Construct aggregated price change event
+        let event = AggregatedPriceChangeEvent {
+            aggregate_id: aggregate_id.to_string(),
+            hashed_market_id: hashed_market_id.to_string(),
+            clob_token_id: msg.clob_token_id.clone(),
+            market_id: msg.market_id.clone(),
+            changes,
+            timestamp_us: Utc::now().timestamp_micros(),
+        };
+
+        // Publish to NATS Core (fire-and-forget for lowest latency)
+        let subject = format!(
+            "orderbook.changes.{}.{}.{}",
+            aggregate_id, hashed_market_id, msg.clob_token_id
+        );
+        let change_bytes = serde_json::to_vec(&event)?;
+
+        debug!(
+            "Publishing aggregated price change to {} ({} changes)",
+            subject,
+            event.changes.len()
+        );
+
+        self.nats_client
+            .publish_fast(&subject, bytes::Bytes::from(change_bytes))
+            .await?;
+
+        counter!("orderbook_service_changes_published_total").increment(1);
 
         Ok(())
     }
@@ -331,6 +469,12 @@ impl OrderbookServiceBuilder {
     /// Set the metrics update interval.
     pub fn metrics_interval_secs(mut self, secs: u64) -> Self {
         self.config.metrics_interval_secs = secs;
+        self
+    }
+
+    /// Enable publishing orderbook changes to NATS for gateway consumption.
+    pub fn publish_changes(mut self, enabled: bool) -> Self {
+        self.config.publish_changes = enabled;
         self
     }
 

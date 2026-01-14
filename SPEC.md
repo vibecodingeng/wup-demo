@@ -40,9 +40,20 @@ This platform is built for professional traders and market makers who require:
                     │         Trading Systems             │
                     │  (Market Makers, Arbitrage Bots)    │
                     └──────────────────┬──────────────────┘
-                                       │ HTTP REST / WebSocket (future)
+                                       │ HTTP REST / WebSocket
                                        ▼
 ┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Gateway Service                                   │
+│  ┌─────────────────────────────────────────────────────────────────────┐    │
+│  │  WebSocket server for real-time streaming                          │    │
+│  │  Subscription management per client                                │    │
+│  │  Snapshot on subscribe + delta streaming                           │    │
+│  └─────────────────────────────────────────────────────────────────────┘    │
+│                                       ▲                                     │
+│                   NATS (price changes)│                                     │
+└───────────────────────────────────────┼─────────────────────────────────────┘
+                                        │
+┌───────────────────────────────────────┼─────────────────────────────────────┐
 │                          Orderbook Service                                  │
 │  ┌─────────────────────────────────────────────────────────────────────┐    │
 │  │  Lock-free DashMap Storage (no mutex contention)                    │    │
@@ -104,7 +115,9 @@ This platform is built for professional traders and market makers who require:
 | 3         | Normalizer parse       | <50μs        | Pre-compiled patterns, avoid allocations      |
 | 4         | Normalizer → NATS      | <100μs       | NATS Core (no persistence overhead)           |
 | 5         | OrderbookService apply | <50μs        | Lock-free DashMap, BTreeMap                   |
-| 6         | HTTP API response      | <500μs       | Connection pooling, JSON streaming            |
+| 6         | Publish change to NATS | <100μs       | NATS Core fire-and-forget                     |
+| 7         | Gateway fan-out        | <200μs       | Pre-serialized JSON, parallel sends           |
+| 8         | HTTP API response      | <500μs       | Connection pooling, JSON streaming            |
 | **Total** | End-to-end             | **<1ms p99** |                                               |
 
 ---
@@ -205,7 +218,7 @@ Different platforms use different identifiers for the same event:
 ├─────────────────────────────────────────────────────────────────┤
 │                                                                 │
 │  Polymarket: "us-election-2024"     ─┐                          │
-│                                       ├──▶ AGG_US_PRES_2024     │
+│                                      ├──▶ AGG_US_PRES_2024     │
 │  Kalshi: "PRES-2024-DEM"            ─┘                          │
 │                                                                 │
 │  Redis Keys:                                                    │
@@ -308,6 +321,37 @@ struct OrderbookStore {
 - No priority inversion issues
 - Better cache locality per shard
 
+### Gateway Service
+
+**Responsibilities:**
+
+- Accept WebSocket connections from trading clients
+- Manage subscriptions per client
+- Route orderbook changes from NATS to subscribed clients
+- Send initial snapshot on subscription
+
+**Key Design:**
+
+```rust
+struct ChangeRouter {
+    registry: Arc<ClientRegistry>,
+    nats_client: Arc<NatsClient>,
+    http_client: reqwest::Client,
+}
+
+// Routes NATS messages to WebSocket clients
+impl ChangeRouter {
+    async fn handle_change(&self, payload: &[u8]) -> Result<()>;
+    async fn send_snapshot(&self, client: &ClientState, subject: &str) -> Result<()>;
+}
+```
+
+**Performance Optimizations:**
+
+- Pre-serialize JSON once, send to all matching clients
+- DashMap for lock-free client registry
+- Wildcard subscription matching with pattern cache
+
 ### Event Service
 
 **Responsibilities:**
@@ -339,10 +383,11 @@ tokio::spawn(async move {
 {type}.{platform}.{market_id}.{asset_id}
 ```
 
-| Pattern                                        | Purpose           | Example                              |
-| ---------------------------------------------- | ----------------- | ------------------------------------ |
-| `market.{platform}.{asset_id}`                 | Raw exchange data | `market.polymarket.12345...`         |
-| `normalized.{platform}.{market_id}.{asset_id}` | Normalized data   | `normalized.polymarket.abc.12345...` |
+| Pattern                                                    | Purpose                 | Example                                  |
+| ---------------------------------------------------------- | ----------------------- | ---------------------------------------- |
+| `market.{platform}.{asset_id}`                             | Raw exchange data       | `market.polymarket.12345...`             |
+| `normalized.{platform}.{market_id}.{asset_id}`             | Normalized data         | `normalized.polymarket.abc.12345...`     |
+| `orderbook.changes.{agg_id}.{hashed_market_id}.{token_id}` | Aggregated price deltas | `orderbook.changes.abc123.def456.token1` |
 
 ### Stream Configuration
 
@@ -425,22 +470,137 @@ tokio::spawn(async move {
 | `/aggregate/{id}/map`              | POST       | Map platform:slug    |
 | `/mapping/{platform}/{slug}`       | GET        | Get aggregate ID     |
 
+### Gateway Service - WebSocket API (`localhost:8082`)
+
+**Endpoint:** `ws://localhost:8082/ws`
+
+#### Client → Server Messages
+
+**Subscribe:**
+```json
+{
+  "type": "subscribe",
+  "subjects": ["agg123.market456.token789", "agg123.*.token789"]
+}
+```
+
+**Unsubscribe:**
+```json
+{
+  "type": "unsubscribe",
+  "subjects": ["agg123.market456.token789"]
+}
+```
+
+**Ping:**
+```json
+{"type": "ping"}
+```
+
+#### Server → Client Messages
+
+**Snapshot** (sent on initial subscribe):
+```json
+{
+  "type": "snapshot",
+  "aggregate_id": "agg123",
+  "hashed_market_id": "market456",
+  "clob_token_id": "token789",
+  "market_id": "original-market-id",
+  "platforms": ["polymarket", "kalshi"],
+  "bids": [
+    {
+      "price": "0.55",
+      "total_size": "1500",
+      "platforms": [
+        {"platform": "polymarket", "size": "1000"},
+        {"platform": "kalshi", "size": "500"}
+      ]
+    }
+  ],
+  "asks": [...],
+  "system_best_bid": "0.55",
+  "system_best_ask": "0.57",
+  "timestamp_us": 1234567890123456
+}
+```
+
+**Price Change** (sent on orderbook updates):
+```json
+{
+  "type": "price_change",
+  "aggregate_id": "agg123",
+  "hashed_market_id": "market456",
+  "clob_token_id": "token789",
+  "market_id": "original-market-id",
+  "changes": [
+    {
+      "price": "0.55",
+      "side": "buy",
+      "total_size": "1600",
+      "platforms": [
+        {"platform": "polymarket", "size": "1100"},
+        {"platform": "kalshi", "size": "500"}
+      ]
+    },
+    {
+      "price": "0.56",
+      "side": "sell",
+      "total_size": "0",
+      "platforms": []
+    }
+  ],
+  "timestamp_us": 1234567890123456
+}
+```
+
+**Note:** A `total_size` of `"0"` with empty `platforms` indicates the price level was removed.
+
+**Subscribed:**
+```json
+{
+  "type": "subscribed",
+  "subjects": ["agg123.market456.token789"]
+}
+```
+
+**Error:**
+```json
+{
+  "type": "error",
+  "message": "Invalid subject format",
+  "code": "INVALID_SUBJECT"
+}
+```
+
+#### Subject Format
+
+Subjects follow the pattern: `{aggregate_id}.{hashed_market_id}.{clob_token_id}`
+
+Wildcards supported:
+- `*` matches any single segment (e.g., `agg123.*.token789`)
+- Wildcard subscriptions do not receive initial snapshots
+
 ---
 
 ## Configuration
 
 ### Environment Variables
 
-| Variable                | Service          | Default                   | Description            |
-| ----------------------- | ---------------- | ------------------------- | ---------------------- |
-| `NATS_URL`              | all              | `nats://localhost:4222`   | NATS server            |
-| `REDIS_URL`             | all              | `redis://localhost:6379`  | Redis server           |
-| `RUST_LOG`              | all              | `info`                    | Log level              |
-| `HTTP_PORT`             | orderbook, event | 8080/8081                 | HTTP API port          |
-| `METRICS_PORT`          | all              | 9090/9091/9092            | Prometheus port        |
-| `EVENT_SLUG`            | aggregator       | -                         | Event to subscribe     |
-| `NATS_SUBJECT`          | orderbook        | `normalized.polymarket.>` | NATS subscription      |
-| `REFRESH_INTERVAL_SECS` | event            | `60`                      | Event refresh interval |
+| Variable                  | Service          | Default                   | Description                             |
+| ------------------------- | ---------------- | ------------------------- | --------------------------------------- |
+| `NATS_URL`                | all              | `nats://localhost:4222`   | NATS server                             |
+| `REDIS_URL`               | all              | `redis://localhost:6379`  | Redis server                            |
+| `RUST_LOG`                | all              | `info`                    | Log level                               |
+| `HTTP_PORT`               | orderbook, event | 8080/8081                 | HTTP API port                           |
+| `METRICS_PORT`            | all              | 9090/9091/9092/9093       | Prometheus port                         |
+| `EVENT_SLUG`              | aggregator       | -                         | Event to subscribe                      |
+| `NATS_SUBJECT`            | orderbook        | `normalized.polymarket.>` | NATS subscription                       |
+| `REFRESH_INTERVAL_SECS`   | event            | `60`                      | Event refresh interval                  |
+| `PUBLISH_CHANGES`         | orderbook        | `false`                   | Publish changes to NATS for gateway     |
+| `WS_PORT`                 | gateway          | `8082`                    | WebSocket server port                   |
+| `ORDERBOOK_SERVICE_URL`   | gateway          | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots)  |
+| `GATEWAY_NATS_SUBJECT`    | gateway          | `orderbook.changes.>`     | NATS subject for price changes          |
 
 ---
 
@@ -526,11 +686,11 @@ fn process(data: NormalizedOrderbook) { }
 - [ ] Cross-exchange arbitrage detection
 - [ ] Unified order routing
 
-### Phase 3: Real-Time Streaming
+### Phase 3: Real-Time Streaming (Complete)
 
-- [ ] WebSocket API for clients
-- [ ] Delta-only updates (bandwidth optimization)
-- [ ] Subscription management
+- [x] WebSocket API for clients (Gateway service)
+- [x] Delta-only updates (aggregated price changes with explicit side)
+- [x] Subscription management (per-client wildcard support)
 
 ### Phase 4: Order Execution
 

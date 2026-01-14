@@ -155,12 +155,12 @@ impl OrderbookStore {
         // Get or create event aggregate entry
         let event_books = self.inner.books
             .entry(event_aggregate_id.to_string())
-            .or_insert_with(DashMap::new);
+            .or_default();
 
         // Get or create market entry using hashed_market_id
         let market_books = event_books
             .entry(hashed_market_id.clone())
-            .or_insert_with(DashMap::new);
+            .or_default();
 
         // Get or create token entry and apply update
         let mut orderbook = market_books
@@ -229,6 +229,50 @@ impl OrderbookStore {
                         market_books
                             .get(clob_token_id)
                             .map(|ob| ob.to_bbo_response(&metadata))
+                    })
+            })
+    }
+
+    /// Get aggregated bid level at a specific price.
+    /// Returns None if the orderbook or price level doesn't exist.
+    pub fn get_aggregated_bid_level(
+        &self,
+        event_aggregate_id: &str,
+        hashed_market_id: &str,
+        clob_token_id: &str,
+        price: &str,
+    ) -> Option<crate::orderbook::AggregatedPriceLevel> {
+        self.inner.books
+            .get(event_aggregate_id)
+            .and_then(|aggregate_books| {
+                aggregate_books
+                    .get(hashed_market_id)
+                    .and_then(|market_books| {
+                        market_books
+                            .get(clob_token_id)
+                            .and_then(|ob| ob.get_aggregated_bid_level(price))
+                    })
+            })
+    }
+
+    /// Get aggregated ask level at a specific price.
+    /// Returns None if the orderbook or price level doesn't exist.
+    pub fn get_aggregated_ask_level(
+        &self,
+        event_aggregate_id: &str,
+        hashed_market_id: &str,
+        clob_token_id: &str,
+        price: &str,
+    ) -> Option<crate::orderbook::AggregatedPriceLevel> {
+        self.inner.books
+            .get(event_aggregate_id)
+            .and_then(|aggregate_books| {
+                aggregate_books
+                    .get(hashed_market_id)
+                    .and_then(|market_books| {
+                        market_books
+                            .get(clob_token_id)
+                            .and_then(|ob| ob.get_aggregated_ask_level(price))
                     })
             })
     }

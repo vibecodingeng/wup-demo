@@ -1,21 +1,18 @@
 [package]
-name = "orderbook_service"
+name = "gateway"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
+description = "WebSocket gateway for real-time orderbook streaming to clients"
 
 [[bin]]
-name = "orderbook_service"
+name = "gateway"
 path = "src/main.rs"
 
 [dependencies]
 # Internal crates
 nats_client = { workspace = true }
 normalizer = { workspace = true }
-external_services = { workspace = true }
-
-# Redis
-redis = { workspace = true }
 
 # Async runtime
 tokio = { workspace = true }
@@ -29,6 +26,9 @@ serde_json = { workspace = true }
 thiserror = { workspace = true }
 anyhow = { workspace = true }
 
+# Async trait
+async-trait = { workspace = true }
+
 # Logging & Tracing
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -40,21 +40,24 @@ metrics-exporter-prometheus = { workspace = true }
 # NATS
 async-nats = { workspace = true }
 
-# HTTP server
-axum = { workspace = true }
+# HTTP server with WebSocket support
+axum = { workspace = true, features = ["ws"] }
 tower-http = { workspace = true }
 
 # Lock-free data structures
 dashmap = { workspace = true }
 
-# Decimal arithmetic
-rust_decimal = { workspace = true }
+# Bytes
+bytes = { workspace = true }
 
 # Time
 chrono = { workspace = true }
 
-# Bytes
-bytes = { workspace = true }
+# HTTP client for fetching snapshots
+reqwest = { workspace = true }
 
-# Hashing
-sha2 = "0.10"
+# UUID for client IDs
+uuid = { workspace = true }
+
+# Environment
+dotenvy = { workspace = true }

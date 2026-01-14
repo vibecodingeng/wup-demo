@@ -54,8 +54,9 @@ docker run -d --name redis -p 6379:6379 redis:latest
 
 # Run services (always use --release for performance)
 cargo run --release --bin aggregator
-cargo run --release --bin orderbook_service
+PUBLISH_CHANGES=true cargo run --release --bin orderbook_service
 cargo run --release --bin event_service
+cargo run --release --bin gateway
 ```
 
 ## Architecture
@@ -94,8 +95,18 @@ cargo run --release --bin event_service
 │   • BTreeMap for O(log n) price level operations                            │
 │   • Platform-aware aggregation (PlatformSizes)                              │
 │   • In-memory only - no disk I/O on hot path                                │
+│   • Publishes aggregated price changes to NATS                              │
 └───────────────────────────────────┬─────────────────────────────────────────┘
-                                    │ HTTP/REST
+                                    │ NATS (price changes) / HTTP
+                                    ▼
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                           Gateway Service                                   │
+│   • WebSocket server for real-time streaming (port 8082)                    │
+│   • Per-client subscription management with wildcards                       │
+│   • Snapshot on subscribe + delta streaming                                 │
+│   • Pre-serialized JSON fan-out to all matching clients                     │
+└───────────────────────────────────┬─────────────────────────────────────────┘
+                                    │ WebSocket / HTTP
                                     ▼
                               Trading Systems
 ```
@@ -107,7 +118,8 @@ cargo run --release --bin event_service
 | 1     | Aggregator       | <10ms          | Persistent WS, zero-copy publish      |
 | 2     | Normalizer       | <100μs         | Pre-allocated buffers, trait dispatch |
 | 3     | OrderbookService | <50μs          | Lock-free DashMap, BTreeMap           |
-| 4     | HTTP API         | <1ms           | Connection pooling, JSON streaming    |
+| 4     | Gateway          | <200μs         | Pre-serialized JSON, parallel fan-out |
+| 5     | HTTP API         | <1ms           | Connection pooling, JSON streaming    |
 
 ### Critical Design Decisions
 
@@ -148,10 +160,11 @@ Storage hierarchy: `aggregate_id` → `market_id` → `asset_id` → `Orderbook`
 
 ## NATS Subject Conventions
 
-| Pattern                                        | Purpose               | Example                           |
-| ---------------------------------------------- | --------------------- | --------------------------------- |
-| `market.{platform}.{asset_id}`                 | Raw exchange messages | `market.polymarket.12345`         |
-| `normalized.{platform}.{market_id}.{asset_id}` | Normalized orderbooks | `normalized.polymarket.abc.12345` |
+| Pattern                                                    | Purpose                 | Example                                  |
+| ---------------------------------------------------------- | ----------------------- | ---------------------------------------- |
+| `market.{platform}.{asset_id}`                             | Raw exchange messages   | `market.polymarket.12345`                |
+| `normalized.{platform}.{market_id}.{asset_id}`             | Normalized orderbooks   | `normalized.polymarket.abc.12345`        |
+| `orderbook.changes.{agg_id}.{hashed_market_id}.{token_id}` | Aggregated price deltas | `orderbook.changes.abc123.def456.token1` |
 
 ## Redis Key Conventions
 
@@ -165,23 +178,27 @@ Storage hierarchy: `aggregate_id` → `market_id` → `asset_id` → `Orderbook`
 
 ```
 common            ← polymarket, aggregator (WsHandler, WsManager)
-nats_client       ← aggregator, normalizer, orderbook_service
-normalizer        ← aggregator (inline), orderbook_service
+nats_client       ← aggregator, normalizer, orderbook_service, gateway
+normalizer        ← aggregator (inline), orderbook_service, gateway
 external_services ← event_service, aggregator, orderbook_service (SharedRedisClient)
+gateway           ← depends on normalizer (for schema types), nats_client
 ```
 
 ## Environment Variables
 
-| Variable                | Service                                      | Default                   | Description            |
-| ----------------------- | -------------------------------------------- | ------------------------- | ---------------------- |
-| `NATS_URL`              | all                                          | `nats://localhost:4222`   | NATS server            |
-| `REDIS_URL`             | aggregator, event_service, orderbook_service | `redis://localhost:6379`  | Redis server           |
-| `METRICS_PORT`          | all                                          | 9090/9091/9092            | Prometheus metrics     |
-| `HTTP_PORT`             | orderbook_service, event_service             | 8080/8081                 | HTTP API               |
-| `REFRESH_INTERVAL_SECS` | event_service                                | `60`                      | Event refresh interval |
-| `EVENT_SLUG`            | aggregator                                   | -                         | Event to subscribe     |
-| `NATS_SUBJECT`          | orderbook_service                            | `normalized.polymarket.>` | NATS subscription      |
-| `RUST_LOG`              | all                                          | `info`                    | Log level              |
+| Variable                | Service                                      | Default                   | Description                            |
+| ----------------------- | -------------------------------------------- | ------------------------- | -------------------------------------- |
+| `NATS_URL`              | all                                          | `nats://localhost:4222`   | NATS server                            |
+| `REDIS_URL`             | aggregator, event_service, orderbook_service | `redis://localhost:6379`  | Redis server                           |
+| `METRICS_PORT`          | all                                          | 9090/9091/9092/9093       | Prometheus metrics                     |
+| `HTTP_PORT`             | orderbook_service, event_service             | 8080/8081                 | HTTP API                               |
+| `REFRESH_INTERVAL_SECS` | event_service                                | `60`                      | Event refresh interval                 |
+| `EVENT_SLUG`            | aggregator                                   | -                         | Event to subscribe                     |
+| `NATS_SUBJECT`          | orderbook_service                            | `normalized.polymarket.>` | NATS subscription                      |
+| `PUBLISH_CHANGES`       | orderbook_service                            | `false`                   | Publish changes to NATS for gateway    |
+| `WS_PORT`               | gateway                                      | `8082`                    | WebSocket server port                  |
+| `ORDERBOOK_SERVICE_URL` | gateway                                      | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots) |
+| `RUST_LOG`              | all                                          | `info`                    | Log level                              |
 
 ## Performance Guidelines
 

@@ -348,6 +348,50 @@ impl Orderbook {
             .collect()
     }
 
+    /// Get aggregated bid level at a specific price.
+    /// Returns None if no orders at that price.
+    pub fn get_aggregated_bid_level(&self, price: &str) -> Option<AggregatedPriceLevel> {
+        let price_decimal = Decimal::from_str(price).ok()?;
+        self.bids.get(&price_decimal).and_then(|sizes| {
+            if sizes.is_empty() {
+                None
+            } else {
+                Some(AggregatedPriceLevel {
+                    price: price_decimal.to_string(),
+                    total_size: sizes.total_size().to_string(),
+                    platforms: sizes.iter()
+                        .map(|(platform, size)| PlatformEntry {
+                            platform: platform.clone(),
+                            size: size.to_string(),
+                        })
+                        .collect(),
+                })
+            }
+        })
+    }
+
+    /// Get aggregated ask level at a specific price.
+    /// Returns None if no orders at that price.
+    pub fn get_aggregated_ask_level(&self, price: &str) -> Option<AggregatedPriceLevel> {
+        let price_decimal = Decimal::from_str(price).ok()?;
+        self.asks.get(&price_decimal).and_then(|sizes| {
+            if sizes.is_empty() {
+                None
+            } else {
+                Some(AggregatedPriceLevel {
+                    price: price_decimal.to_string(),
+                    total_size: sizes.total_size().to_string(),
+                    platforms: sizes.iter()
+                        .map(|(platform, size)| PlatformEntry {
+                            platform: platform.clone(),
+                            size: size.to_string(),
+                        })
+                        .collect(),
+                })
+            }
+        })
+    }
+
     /// Total bid depth (sum of all bid sizes across all platforms).
     pub fn bid_depth(&self) -> Decimal {
         self.bids.values().map(|s| s.total_size()).sum()
@@ -376,10 +420,14 @@ impl Orderbook {
 
     /// Convert to full orderbook API response with platform breakdown.
     ///
+    /// If depth is None, returns ALL price levels (no limit).
+    /// If depth is Some(n), returns top n price levels.
+    ///
     /// Metadata is provided separately from cached stores, keeping the internal
     /// Orderbook struct focused on order matching.
     pub fn to_response(&self, depth: Option<usize>, metadata: &ResponseMetadata) -> OrderbookResponse {
-        let depth = depth.unwrap_or(10);
+        // When depth is None, return all levels (use usize::MAX as "unlimited")
+        let depth = depth.unwrap_or(usize::MAX);
         OrderbookResponse {
             event: metadata.event.clone(),
             market: MarketInfo {

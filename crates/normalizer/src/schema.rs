@@ -84,3 +84,104 @@ pub struct NormalizedOrderbook {
     /// Normalizer processing timestamp (ISO 8601).
     pub normalized_at: String,
 }
+
+/// Platform entry showing a platform's size at a price level.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct PlatformEntry {
+    /// Platform name (e.g., "polymarket", "kalshi").
+    pub platform: String,
+    /// Size from this platform at the price level.
+    pub size: String,
+}
+
+/// Aggregated price level with platform breakdown.
+/// This is the format used in WebSocket messages and HTTP API responses.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedPriceLevel {
+    /// Price at this level.
+    pub price: String,
+    /// Total size across all platforms.
+    pub total_size: String,
+    /// Breakdown by platform.
+    pub platforms: Vec<PlatformEntry>,
+}
+
+/// Orderbook change event published to NATS for gateway consumption.
+/// This is emitted by OrderbookService after applying updates.
+/// Contains the full aggregated orderbook state after the change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct OrderbookChange {
+    /// Event aggregate identifier.
+    pub aggregate_id: String,
+    /// Hashed market identifier (first 16 chars of SHA256).
+    pub hashed_market_id: String,
+    /// CLOB token identifier.
+    pub clob_token_id: String,
+    /// Original market identifier.
+    pub market_id: String,
+    /// List of platforms contributing to this orderbook.
+    pub platforms: Vec<String>,
+    /// Aggregated bid price levels (sorted by price descending).
+    pub bids: Vec<AggregatedPriceLevel>,
+    /// Aggregated ask price levels (sorted by price ascending).
+    pub asks: Vec<AggregatedPriceLevel>,
+    /// System-calculated best bid after this change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_best_bid: Option<String>,
+    /// System-calculated best ask after this change.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub system_best_ask: Option<String>,
+    /// Timestamp in microseconds for latency tracking.
+    pub timestamp_us: i64,
+}
+
+/// Order side for price change events (lowercase JSON serialization).
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum OrderSide {
+    /// Buy side (bids).
+    Buy,
+    /// Sell side (asks).
+    Sell,
+}
+
+impl From<Side> for OrderSide {
+    fn from(side: Side) -> Self {
+        match side {
+            Side::Buy => OrderSide::Buy,
+            Side::Sell => OrderSide::Sell,
+        }
+    }
+}
+
+/// Aggregated price level change with explicit side.
+/// Contains the full aggregated state for a price level after a change.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedPriceLevelChange {
+    /// Price at this level.
+    pub price: String,
+    /// Order side (buy or sell).
+    pub side: OrderSide,
+    /// Total size across all platforms.
+    pub total_size: String,
+    /// Breakdown by platform.
+    pub platforms: Vec<PlatformEntry>,
+}
+
+/// Aggregated price change event published to NATS for gateway consumption.
+/// Contains aggregated state for each changed price level with explicit side.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AggregatedPriceChangeEvent {
+    /// Event aggregate identifier.
+    pub aggregate_id: String,
+    /// Hashed market identifier (first 16 chars of SHA256).
+    pub hashed_market_id: String,
+    /// CLOB token identifier.
+    pub clob_token_id: String,
+    /// Original market identifier.
+    pub market_id: String,
+    /// All changed price levels with explicit side and platform breakdown.
+    pub changes: Vec<AggregatedPriceLevelChange>,
+    /// Timestamp in microseconds for latency tracking.
+    pub timestamp_us: i64,
+}

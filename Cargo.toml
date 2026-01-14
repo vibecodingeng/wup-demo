@@ -9,6 +9,7 @@ members = [
   "crates/orderbook_service",
   "crates/external_services",
   "crates/event_service",
+  "crates/gateway",
 ]
 
 [workspace.package]
@@ -72,6 +73,9 @@ redis = { version = "0.27", features = ["tokio-comp", "connection-manager"] }
 # Environment
 dotenvy = "0.15"
 
+# UUID
+uuid = { version = "1.11", features = ["v4"] }
+
 # Internal crates
 common = { path = "crates/common" }
 nats_client = { path = "crates/nats_client" }
@@ -80,3 +84,4 @@ normalizer = { path = "crates/normalizer" }
 orderbook_service = { path = "crates/orderbook_service" }
 external_services = { path = "crates/external_services" }
 event_service = { path = "crates/event_service" }
+gateway = { path = "crates/gateway" }

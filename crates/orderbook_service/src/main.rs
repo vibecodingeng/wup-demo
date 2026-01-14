@@ -62,11 +62,23 @@ async fn main() -> Result<()> {
     // Create shutdown channel
     let (shutdown_tx, shutdown_rx) = mpsc::channel::<()>(1);
 
+    // Check if change publishing is enabled (for gateway integration)
+    let publish_changes = std::env::var("PUBLISH_CHANGES")
+        .map(|v| v == "true" || v == "1")
+        .unwrap_or(false);
+
+    if publish_changes {
+        info!("Change publishing ENABLED - will publish to orderbook.changes.>");
+    } else {
+        info!("Change publishing DISABLED - set PUBLISH_CHANGES=true to enable gateway integration");
+    }
+
     // Create and spawn orderbook service
     let service_config = OrderbookServiceConfig {
         subject: nats_subject.clone(),
         metrics_interval_secs: 5,
         redis_url,
+        publish_changes,
     };
 
     let service = OrderbookService::new(store.clone(), nats_client, service_config, shutdown_rx);
