@@ -202,7 +202,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
         .map(|l| PriceLevel {
             price: l.price,
             size: l.size,
-            platform: platform.clone(),
         })
         .collect();
 
@@ -212,7 +211,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
         .map(|l| PriceLevel {
             price: l.price,
             size: l.size,
-            platform: platform.clone(),
         })
         .collect();
 
@@ -221,7 +219,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
 
     NormalizedOrderbook {
         exchange: PolymarketAdapter::NAME.to_string(),
-        platform,
         clob_token_id: book.asset_id,
         market_id: book.market,
         message_type: OrderbookMessageType::Snapshot,
@@ -264,7 +261,11 @@ fn transform_price_change(
             let updates: Vec<OrderbookUpdate> = changes
                 .into_iter()
                 .map(|c| OrderbookUpdate {
-                    side: if c.side == "BUY" { Side::Buy } else { Side::Sell },
+                    side: if c.side == "BUY" {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    },
                     price: c.price,
                     size: c.size,
                 })
@@ -274,7 +275,6 @@ fn transform_price_change(
 
             NormalizedOrderbook {
                 exchange: PolymarketAdapter::NAME.to_string(),
-                platform: platform.clone(),
                 clob_token_id,
                 market_id: msg.market.clone(),
                 message_type: OrderbookMessageType::Delta,
@@ -317,7 +317,6 @@ mod tests {
         assert_eq!(result.len(), 1);
         let normalized = &result[0];
         assert_eq!(normalized.exchange, "polymarket");
-        assert_eq!(normalized.platform, "polymarket");
         assert_eq!(normalized.clob_token_id, "abc123");
         assert_eq!(normalized.message_type, OrderbookMessageType::Snapshot);
         assert!(normalized.bids.is_some());
@@ -327,7 +326,6 @@ mod tests {
         assert_eq!(normalized.best_ask, Some("0.60".to_string()));
         // Verify price levels have platform field
         let bids = normalized.bids.as_ref().unwrap();
-        assert_eq!(bids[0].platform, "polymarket");
     }
 
     #[test]
@@ -353,7 +351,6 @@ mod tests {
         assert_eq!(result.len(), 1);
         let normalized = &result[0];
         assert_eq!(normalized.exchange, "polymarket");
-        assert_eq!(normalized.platform, "polymarket");
         assert_eq!(normalized.message_type, OrderbookMessageType::Delta);
         assert!(normalized.updates.is_some());
         assert_eq!(normalized.updates.as_ref().unwrap()[0].side, Side::Buy);

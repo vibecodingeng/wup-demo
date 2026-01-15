@@ -14,9 +14,6 @@ pub struct PriceLevel {
     pub price: String,
     /// Size/quantity at this price level.
     pub size: String,
-    /// Source platform (e.g., "polymarket", "kalshi").
-    #[serde(default = "default_platform")]
-    pub platform: String,
 }
 
 /// Type of orderbook message.
@@ -53,9 +50,6 @@ pub struct OrderbookUpdate {
 pub struct NormalizedOrderbook {
     /// Source exchange identifier.
     pub exchange: String,
-    /// Source platform identifier (e.g., "polymarket", "kalshi").
-    #[serde(default = "default_platform")]
-    pub platform: String,
     /// CLOB token identifier (the tradeable token/outcome).
     pub clob_token_id: String,
     /// Market identifier (condition_id on Polymarket).
