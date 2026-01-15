@@ -1,16 +1,15 @@
 //! HTTP API handlers and routes using axum.
 //!
-//! Provides REST API for orderbook queries with aggregate_id support.
+//! Provides REST API for orderbook queries with 2-level hierarchy.
 //!
 //! Routes:
 //! - GET /health - Health check
 //! - GET /stats - Store statistics
 //! - GET /orderbooks - List all orderbooks
-//! - GET /orderbook/{aggregate_id} - Get all orderbooks for an aggregate
-//! - GET /orderbook/{aggregate_id}/{hashed_market_id} - Get orderbooks for market within aggregate
-//! - GET /orderbook/{aggregate_id}/{hashed_market_id}/{clob_token_id} - Get specific orderbook
-//! - GET /bbo/{aggregate_id}/{hashed_market_id} - Get BBOs for market
-//! - GET /bbo/{aggregate_id}/{hashed_market_id}/{clob_token_id} - Get specific BBO
+//! - GET /orderbook/{market_id} - Get all orderbooks for a market
+//! - GET /orderbook/{market_id}/{asset_id} - Get specific orderbook
+//! - GET /bbo/{market_id} - Get BBOs for all assets in a market
+//! - GET /bbo/{market_id}/{asset_id} - Get specific BBO
 
 use crate::store::OrderbookStore;
 use axum::{
@@ -44,12 +43,11 @@ pub fn create_router(state: AppState) -> Router {
         .route("/health", get(health_handler))
         .route("/stats", get(stats_handler))
         .route("/orderbooks", get(list_all_handler))
-        // Aggregate-based routes
-        .route("/orderbook/{aggregate_id}", get(get_aggregate_handler))
-        .route("/orderbook/{aggregate_id}/{hashed_market_id}", get(get_market_handler))
-        .route("/orderbook/{aggregate_id}/{hashed_market_id}/{clob_token_id}", get(get_orderbook_handler))
-        .route("/bbo/{aggregate_id}/{hashed_market_id}", get(get_market_bbos_handler))
-        .route("/bbo/{aggregate_id}/{hashed_market_id}/{clob_token_id}", get(get_bbo_handler))
+        // Market-based routes (2-level hierarchy)
+        .route("/orderbook/{market_id}", get(get_market_handler))
+        .route("/orderbook/{market_id}/{asset_id}", get(get_orderbook_handler))
+        .route("/bbo/{market_id}", get(get_market_bbos_handler))
+        .route("/bbo/{market_id}/{asset_id}", get(get_bbo_handler))
         .layer(TraceLayer::new_for_http())
         .layer(CorsLayer::permissive())
         .with_state(Arc::new(state))
@@ -79,7 +77,7 @@ async fn stats_handler(
     Json(stats)
 }
 
-/// List all aggregates, markets, and tokens (summary).
+/// List all markets and their assets (summary).
 /// GET /orderbooks
 async fn list_all_handler(
     State(state): State<Arc<AppState>>,
@@ -88,77 +86,58 @@ async fn list_all_handler(
     Json(response)
 }
 
-/// Get all orderbooks for an aggregate.
-/// GET /orderbook/{aggregate_id}
-async fn get_aggregate_handler(
-    State(state): State<Arc<AppState>>,
-    Path(aggregate_id): Path<String>,
-    Query(query): Query<OrderbookQuery>,
-) -> Result<impl IntoResponse, ApiError> {
-    match state.store.get_aggregate(&aggregate_id, query.depth) {
-        Some(response) => Ok(Json(response)),
-        None => Err(ApiError::NotFound(format!("Aggregate '{}' not found", aggregate_id))),
-    }
-}
-
-/// Get all orderbooks for a market within an aggregate.
-/// GET /orderbook/{aggregate_id}/{hashed_market_id}
+/// Get all orderbooks for a market.
+/// GET /orderbook/{market_id}
 async fn get_market_handler(
     State(state): State<Arc<AppState>>,
-    Path((aggregate_id, hashed_market_id)): Path<(String, String)>,
+    Path(market_id): Path<String>,
     Query(query): Query<OrderbookQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match state.store.get_market(&aggregate_id, &hashed_market_id, query.depth) {
+    match state.store.get_market(&market_id, query.depth) {
         Some(response) => Ok(Json(response)),
-        None => Err(ApiError::NotFound(format!(
-            "Market '{}' in aggregate '{}' not found",
-            hashed_market_id, aggregate_id
-        ))),
+        None => Err(ApiError::NotFound(format!("Market '{}' not found", market_id))),
     }
 }
 
 /// Get a specific orderbook.
-/// GET /orderbook/{aggregate_id}/{hashed_market_id}/{clob_token_id}
+/// GET /orderbook/{market_id}/{asset_id}
 async fn get_orderbook_handler(
     State(state): State<Arc<AppState>>,
-    Path((aggregate_id, hashed_market_id, clob_token_id)): Path<(String, String, String)>,
+    Path((market_id, asset_id)): Path<(String, String)>,
     Query(query): Query<OrderbookQuery>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match state.store.get(&aggregate_id, &hashed_market_id, &clob_token_id, query.depth) {
+    match state.store.get(&market_id, &asset_id, query.depth) {
         Some(response) => Ok(Json(response)),
         None => Err(ApiError::NotFound(format!(
-            "Orderbook for aggregate '{}', market '{}', token '{}' not found",
-            aggregate_id, hashed_market_id, clob_token_id
+            "Orderbook for market '{}', asset '{}' not found",
+            market_id, asset_id
         ))),
     }
 }
 
-/// Get all BBOs for a market within an aggregate.
-/// GET /bbo/{aggregate_id}/{hashed_market_id}
+/// Get all BBOs for a market.
+/// GET /bbo/{market_id}
 async fn get_market_bbos_handler(
     State(state): State<Arc<AppState>>,
-    Path((aggregate_id, hashed_market_id)): Path<(String, String)>,
+    Path(market_id): Path<String>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match state.store.get_market_bbos(&aggregate_id, &hashed_market_id) {
+    match state.store.get_market_bbos(&market_id) {
         Some(response) => Ok(Json(response)),
-        None => Err(ApiError::NotFound(format!(
-            "Market '{}' in aggregate '{}' not found",
-            hashed_market_id, aggregate_id
-        ))),
+        None => Err(ApiError::NotFound(format!("Market '{}' not found", market_id))),
     }
 }
 
-/// Get BBO for a specific token.
-/// GET /bbo/{aggregate_id}/{hashed_market_id}/{clob_token_id}
+/// Get BBO for a specific asset.
+/// GET /bbo/{market_id}/{asset_id}
 async fn get_bbo_handler(
     State(state): State<Arc<AppState>>,
-    Path((aggregate_id, hashed_market_id, clob_token_id)): Path<(String, String, String)>,
+    Path((market_id, asset_id)): Path<(String, String)>,
 ) -> Result<impl IntoResponse, ApiError> {
-    match state.store.get_bbo(&aggregate_id, &hashed_market_id, &clob_token_id) {
+    match state.store.get_bbo(&market_id, &asset_id) {
         Some(response) => Ok(Json(response)),
         None => Err(ApiError::NotFound(format!(
-            "BBO for aggregate '{}', market '{}', token '{}' not found",
-            aggregate_id, hashed_market_id, clob_token_id
+            "BBO for market '{}', asset '{}' not found",
+            market_id, asset_id
         ))),
     }
 }

@@ -429,13 +429,12 @@ impl Orderbook {
         // When depth is None, return all levels (use usize::MAX as "unlimited")
         let depth = depth.unwrap_or(usize::MAX);
         OrderbookResponse {
-            event: metadata.event.clone(),
             market: MarketInfo {
-                hashed_market_id: metadata.hashed_market_id.clone(),
+                market_id: metadata.market_id.clone(),
                 questions: metadata.market_questions.clone(),
                 slugs: metadata.market_slugs.clone(),
             },
-            clob_token_id: self.clob_token_id.clone(),
+            asset_id: self.clob_token_id.clone(),
             market_id: self.market_id.clone(),
             platforms: self.platforms.clone(),
             bids: self.top_bids_with_platforms(depth),
@@ -459,10 +458,10 @@ impl Orderbook {
     /// Convert to BBO (Best Bid/Offer) response.
     pub fn to_bbo_response(&self, metadata: &ResponseMetadata) -> BboResponse {
         BboResponse {
-            clob_token_id: self.clob_token_id.clone(),
+            asset_id: self.clob_token_id.clone(),
             market_id: self.market_id.clone(),
             market: MarketInfo {
-                hashed_market_id: metadata.hashed_market_id.clone(),
+                market_id: metadata.market_id.clone(),
                 questions: metadata.market_questions.clone(),
                 slugs: metadata.market_slugs.clone(),
             },
@@ -480,7 +479,7 @@ impl Orderbook {
     /// Metadata is passed for consistency but not currently used in summary.
     pub fn to_summary(&self, _metadata: &ResponseMetadata) -> TokenSummary {
         TokenSummary {
-            clob_token_id: self.clob_token_id.clone(),
+            asset_id: self.clob_token_id.clone(),
             platforms: self.platforms.clone(),
             system_best_bid: self.system_best_bid.map(|d| d.to_string()),
             system_best_ask: self.system_best_ask.map(|d| d.to_string()),
@@ -515,8 +514,8 @@ pub struct EventInfo {
 /// Market information for API responses.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct MarketInfo {
-    /// Hashed market ID (16-char SHA256 of condition_id).
-    pub hashed_market_id: String,
+    /// Market ID (condition_id from exchange).
+    pub market_id: String,
     /// Platform-specific market questions: {"polymarket": "question", "kalshi": "question"}
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub questions: HashMap<String, String>,
@@ -529,10 +528,8 @@ pub struct MarketInfo {
 /// Separates API metadata from the internal Orderbook struct.
 #[derive(Debug, Clone, Default)]
 pub struct ResponseMetadata {
-    /// Event information (optional if not linked to an event).
-    pub event: Option<EventInfo>,
-    /// Hashed market ID.
-    pub hashed_market_id: String,
+    /// Market ID (condition_id from exchange).
+    pub market_id: String,
     /// Platform-specific market questions.
     pub market_questions: HashMap<String, String>,
     /// Platform-specific market slugs.
@@ -566,14 +563,11 @@ pub struct AggregatedPriceLevel {
 /// Full orderbook API response with multi-platform support.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderbookResponse {
-    /// Event details (title, slug, description per platform).
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub event: Option<EventInfo>,
     /// Market details (question, slug per platform).
     pub market: MarketInfo,
-    /// CLOB token identifier (the tradeable token/outcome).
-    pub clob_token_id: String,
-    /// Market identifier (condition_id).
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
     /// List of platforms contributing to this orderbook.
     pub platforms: Vec<String>,
@@ -612,9 +606,9 @@ pub struct OrderbookResponse {
 /// BBO (Best Bid/Offer) API response.
 #[derive(Debug, Clone, Serialize)]
 pub struct BboResponse {
-    /// CLOB token identifier (the tradeable token/outcome).
-    pub clob_token_id: String,
-    /// Market identifier (condition_id).
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
     /// Market details (question, slug per platform).
     pub market: MarketInfo,
@@ -632,8 +626,8 @@ pub struct BboResponse {
 /// Token summary for listing.
 #[derive(Debug, Clone, Serialize)]
 pub struct TokenSummary {
-    /// CLOB token identifier (the tradeable token/outcome).
-    pub clob_token_id: String,
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
     /// List of platforms with data for this token.
     pub platforms: Vec<String>,
     pub system_best_bid: Option<String>,
@@ -655,8 +649,7 @@ mod tests {
     /// Create a default ResponseMetadata for testing
     fn make_metadata() -> ResponseMetadata {
         ResponseMetadata {
-            event: None,
-            hashed_market_id: "testhash12345678".to_string(),
+            market_id: "market1".to_string(),
             market_questions: HashMap::new(),
             market_slugs: HashMap::new(),
         }
@@ -664,18 +657,17 @@ mod tests {
 
     fn make_snapshot(platform: &str) -> NormalizedOrderbook {
         NormalizedOrderbook {
-            exchange: platform.to_string(),
             platform: platform.to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
             message_type: OrderbookMessageType::Snapshot,
             bids: Some(vec![
-                PriceLevel { price: "0.55".to_string(), size: "100".to_string(), platform: platform.to_string() },
-                PriceLevel { price: "0.54".to_string(), size: "200".to_string(), platform: platform.to_string() },
+                PriceLevel { price: "0.55".to_string(), size: "100".to_string() },
+                PriceLevel { price: "0.54".to_string(), size: "200".to_string() },
             ]),
             asks: Some(vec![
-                PriceLevel { price: "0.56".to_string(), size: "150".to_string(), platform: platform.to_string() },
-                PriceLevel { price: "0.57".to_string(), size: "50".to_string(), platform: platform.to_string() },
+                PriceLevel { price: "0.56".to_string(), size: "150".to_string() },
+                PriceLevel { price: "0.57".to_string(), size: "50".to_string() },
             ]),
             updates: None,
             best_bid: Some("0.55".to_string()),
@@ -688,7 +680,6 @@ mod tests {
 
     fn make_delta(platform: &str) -> NormalizedOrderbook {
         NormalizedOrderbook {
-            exchange: platform.to_string(),
             platform: platform.to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
@@ -744,7 +735,6 @@ mod tests {
 
         // Remove bid at 0.54 by setting size to 0
         let remove_delta = NormalizedOrderbook {
-            exchange: "polymarket".to_string(),
             platform: "polymarket".to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
@@ -772,7 +762,6 @@ mod tests {
 
         // Add a better bid
         let better_bid = NormalizedOrderbook {
-            exchange: "polymarket".to_string(),
             platform: "polymarket".to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
@@ -818,7 +807,7 @@ mod tests {
 
         let metadata = make_metadata();
         let response = ob.to_response(Some(5), &metadata);
-        assert_eq!(response.clob_token_id, "token1");
+        assert_eq!(response.asset_id, "token1");
         assert_eq!(response.bids.len(), 2);
         assert_eq!(response.asks.len(), 2);
         assert_eq!(response.system_best_bid, Some("0.55".to_string()));
@@ -854,16 +843,15 @@ mod tests {
 
         // Apply kalshi snapshot at same prices
         let kalshi_snapshot = NormalizedOrderbook {
-            exchange: "kalshi".to_string(),
             platform: "kalshi".to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
             message_type: OrderbookMessageType::Snapshot,
             bids: Some(vec![
-                PriceLevel { price: "0.55".to_string(), size: "50".to_string(), platform: "kalshi".to_string() },
+                PriceLevel { price: "0.55".to_string(), size: "50".to_string() },
             ]),
             asks: Some(vec![
-                PriceLevel { price: "0.56".to_string(), size: "75".to_string(), platform: "kalshi".to_string() },
+                PriceLevel { price: "0.56".to_string(), size: "75".to_string() },
             ]),
             updates: None,
             best_bid: Some("0.55".to_string()),
@@ -900,16 +888,15 @@ mod tests {
 
         // Apply kalshi snapshot
         let kalshi_snapshot = NormalizedOrderbook {
-            exchange: "kalshi".to_string(),
             platform: "kalshi".to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
             message_type: OrderbookMessageType::Snapshot,
             bids: Some(vec![
-                PriceLevel { price: "0.55".to_string(), size: "50".to_string(), platform: "kalshi".to_string() },
+                PriceLevel { price: "0.55".to_string(), size: "50".to_string() },
             ]),
             asks: Some(vec![
-                PriceLevel { price: "0.56".to_string(), size: "75".to_string(), platform: "kalshi".to_string() },
+                PriceLevel { price: "0.56".to_string(), size: "75".to_string() },
             ]),
             updates: None,
             best_bid: Some("0.55".to_string()),
@@ -922,16 +909,15 @@ mod tests {
 
         // Now apply a NEW polymarket snapshot (should only replace polymarket's data)
         let poly_new_snapshot = NormalizedOrderbook {
-            exchange: "polymarket".to_string(),
             platform: "polymarket".to_string(),
             clob_token_id: "token1".to_string(),
             market_id: "market1".to_string(),
             message_type: OrderbookMessageType::Snapshot,
             bids: Some(vec![
-                PriceLevel { price: "0.53".to_string(), size: "300".to_string(), platform: "polymarket".to_string() },
+                PriceLevel { price: "0.53".to_string(), size: "300".to_string() },
             ]),
             asks: Some(vec![
-                PriceLevel { price: "0.58".to_string(), size: "200".to_string(), platform: "polymarket".to_string() },
+                PriceLevel { price: "0.58".to_string(), size: "200".to_string() },
             ]),
             updates: None,
             best_bid: Some("0.53".to_string()),

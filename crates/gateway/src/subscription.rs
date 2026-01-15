@@ -55,29 +55,21 @@ pub fn parse_subject(subject: &str) -> Vec<String> {
     subject.split('.').map(|s| s.to_string()).collect()
 }
 
-/// Build a NATS subject from components.
-pub fn build_subject(aggregate_id: &str, hashed_market_id: &str, clob_token_id: &str) -> String {
-    format!("{}.{}.{}", aggregate_id, hashed_market_id, clob_token_id)
+/// Build a NATS subject from components (2-level hierarchy).
+pub fn build_subject(market_id: &str, asset_id: &str) -> String {
+    format!("{}.{}", market_id, asset_id)
 }
 
 /// Extract subject components from a NATS subject.
-/// Returns (aggregate_id, hashed_market_id, clob_token_id) if valid.
-pub fn extract_subject_parts(subject: &str) -> Option<(String, String, String)> {
-    // Subject format: orderbook.changes.{aggregate_id}.{hashed_market_id}.{clob_token_id}
+/// Returns (market_id, asset_id) if valid.
+pub fn extract_subject_parts(subject: &str) -> Option<(String, String)> {
+    // Subject format: orderbook.changes.{market_id}.{asset_id}
     let parts: Vec<&str> = subject.split('.').collect();
-    if parts.len() >= 5 && parts[0] == "orderbook" && parts[1] == "changes" {
-        Some((
-            parts[2].to_string(),
-            parts[3].to_string(),
-            parts[4].to_string(),
-        ))
-    } else if parts.len() >= 3 {
-        // Direct format: {aggregate_id}.{hashed_market_id}.{clob_token_id}
-        Some((
-            parts[0].to_string(),
-            parts[1].to_string(),
-            parts[2].to_string(),
-        ))
+    if parts.len() >= 4 && parts[0] == "orderbook" && parts[1] == "changes" {
+        Some((parts[2].to_string(), parts[3].to_string()))
+    } else if parts.len() >= 2 {
+        // Direct format: {market_id}.{asset_id}
+        Some((parts[0].to_string(), parts[1].to_string()))
     } else {
         None
     }

@@ -65,14 +65,10 @@ pub enum ServerMessage {
 /// This is the format sent via WebSocket for full orderbook snapshots.
 #[derive(Debug, Clone, Serialize)]
 pub struct OrderbookData {
-    /// Event aggregate identifier.
-    pub aggregate_id: String,
-    /// Hashed market identifier.
-    pub hashed_market_id: String,
-    /// CLOB token identifier.
-    pub clob_token_id: String,
-    /// Original market identifier.
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
     /// List of platforms contributing to this orderbook.
     pub platforms: Vec<String>,
     /// Aggregated bid price levels (sorted by price descending).
@@ -93,14 +89,10 @@ pub struct OrderbookData {
 /// This is the format sent via WebSocket for orderbook updates.
 #[derive(Debug, Clone, Serialize)]
 pub struct PriceChangeData {
-    /// Event aggregate identifier.
-    pub aggregate_id: String,
-    /// Hashed market identifier.
-    pub hashed_market_id: String,
-    /// CLOB token identifier.
-    pub clob_token_id: String,
-    /// Original market identifier.
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
     /// Changed price levels with explicit side and platform breakdown.
     /// Size of "0" means the level was removed.
     pub changes: Vec<AggregatedPriceLevelChange>,
@@ -111,10 +103,8 @@ pub struct PriceChangeData {
 impl From<AggregatedPriceChangeEvent> for PriceChangeData {
     fn from(event: AggregatedPriceChangeEvent) -> Self {
         Self {
-            aggregate_id: event.aggregate_id,
-            hashed_market_id: event.hashed_market_id,
-            clob_token_id: event.clob_token_id,
             market_id: event.market_id,
+            asset_id: event.asset_id,
             changes: event.changes,
             timestamp_us: event.timestamp_us,
         }
@@ -124,7 +114,7 @@ impl From<AggregatedPriceChangeEvent> for PriceChangeData {
 /// Orderbook response from HTTP API (for initial snapshots).
 #[derive(Debug, Clone, Deserialize)]
 pub struct OrderbookHttpResponse {
-    pub clob_token_id: String,
+    pub asset_id: String,
     pub market_id: String,
     pub platforms: Vec<String>,
     pub bids: Vec<HttpAggregatedPriceLevel>,
@@ -148,14 +138,17 @@ pub struct HttpPlatformSize {
     pub size: String,
 }
 
+/// Market orderbooks response from HTTP API (for wildcard snapshots).
+#[derive(Debug, Clone, Deserialize)]
+pub struct MarketOrderbooksHttpResponse {
+    pub market_id: String,
+    pub asset_count: usize,
+    pub assets: Vec<OrderbookHttpResponse>,
+}
+
 impl OrderbookHttpResponse {
     /// Convert to orderbook data for WebSocket.
-    pub fn to_orderbook_data(
-        self,
-        aggregate_id: String,
-        hashed_market_id: String,
-        timestamp_us: i64,
-    ) -> OrderbookData {
+    pub fn to_orderbook_data(self, timestamp_us: i64) -> OrderbookData {
         use normalizer::schema::PlatformEntry;
 
         let bids: Vec<AggregatedPriceLevel> = self
@@ -193,10 +186,8 @@ impl OrderbookHttpResponse {
             .collect();
 
         OrderbookData {
-            aggregate_id,
-            hashed_market_id,
-            clob_token_id: self.clob_token_id,
             market_id: self.market_id,
+            asset_id: self.asset_id,
             platforms: self.platforms,
             bids,
             asks,

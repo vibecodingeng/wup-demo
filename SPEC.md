@@ -136,13 +136,8 @@ struct PlatformSizes {
 
 /// Orderbook with multi-platform support
 struct Orderbook {
-    asset_id: String,
-    market_id: String,
-    aggregate_id: Option<String>,
-
-    // Market metadata (from Redis)
-    market_question: Option<String>,
-    market_slug: Option<String>,
+    clob_token_id: String,  // Asset identifier (becomes asset_id in API)
+    market_id: String,      // Market identifier (condition_id)
 
     // Price -> PlatformSizes (multiple platforms at same price)
     bids: BTreeMap<Decimal, PlatformSizes>,
@@ -178,10 +173,9 @@ All exchanges normalize to a common schema:
 
 ```rust
 struct NormalizedOrderbook {
-    exchange: String,           // Source exchange name
-    platform: String,           // Platform identifier (for routing)
-    asset_id: String,           // Token/contract ID
-    market_id: String,          // Market/event ID
+    platform: String,           // Platform identifier (e.g., "polymarket", "kalshi")
+    clob_token_id: String,      // Asset/token ID (becomes asset_id)
+    market_id: String,          // Market/condition ID
     message_type: MessageType,  // Snapshot | Delta
 
     // Snapshot data
@@ -204,7 +198,6 @@ struct NormalizedOrderbook {
 struct PriceLevel {
     price: String,    // Decimal as string (precision preserved)
     size: String,
-    platform: String, // Source platform
 }
 ```
 
@@ -305,11 +298,11 @@ impl ExchangeAdapter for KalshiAdapter { ... }
 ```rust
 struct OrderbookStore {
     // DashMap: sharded concurrent hashmap (no global lock)
-    books: DashMap<String, DashMap<String, DashMap<String, Orderbook>>>,
-    //       aggregate_id     market_id     asset_id
+    // 2-level hierarchy: market_id -> asset_id -> Orderbook
+    books: DashMap<String, DashMap<String, Orderbook>>,
+    //       market_id     asset_id
 
     // Caches (also DashMap for concurrent access)
-    aggregate_mapping_cache: DashMap<String, String>,
     market_metadata_cache: DashMap<String, MarketMetadata>,
 }
 ```
@@ -383,11 +376,11 @@ tokio::spawn(async move {
 {type}.{platform}.{market_id}.{asset_id}
 ```
 
-| Pattern                                                    | Purpose                 | Example                                  |
-| ---------------------------------------------------------- | ----------------------- | ---------------------------------------- |
-| `market.{platform}.{asset_id}`                             | Raw exchange data       | `market.polymarket.12345...`             |
-| `normalized.{platform}.{market_id}.{asset_id}`             | Normalized data         | `normalized.polymarket.abc.12345...`     |
-| `orderbook.changes.{agg_id}.{hashed_market_id}.{token_id}` | Aggregated price deltas | `orderbook.changes.abc123.def456.token1` |
+| Pattern                                        | Purpose                 | Example                               |
+| ---------------------------------------------- | ----------------------- | ------------------------------------- |
+| `market.{platform}.{asset_id}`                 | Raw exchange data       | `market.polymarket.12345...`          |
+| `normalized.{platform}.{market_id}.{asset_id}` | Normalized data         | `normalized.polymarket.abc.12345...`  |
+| `orderbook.changes.{market_id}.{asset_id}`     | Aggregated price deltas | `orderbook.changes.0x1234abcd.token1` |
 
 ### Stream Configuration
 
@@ -408,16 +401,20 @@ tokio::spawn(async move {
 
 ### Orderbook Service (`localhost:8080`)
 
-| Endpoint                                     | Method | Description                  |
-| -------------------------------------------- | ------ | ---------------------------- |
-| `/health`                                    | GET    | Health check                 |
-| `/stats`                                     | GET    | Service statistics           |
-| `/orderbooks`                                | GET    | List all aggregates/markets  |
-| `/orderbook/{agg_id}`                        | GET    | All orderbooks for aggregate |
-| `/orderbook/{agg_id}/{market_id}`            | GET    | Orderbooks for market        |
-| `/orderbook/{agg_id}/{market_id}/{asset_id}` | GET    | Specific orderbook           |
-| `/bbo/{agg_id}/{market_id}`                  | GET    | BBOs for market              |
-| `/bbo/{agg_id}/{market_id}/{asset_id}`       | GET    | Specific BBO                 |
+| Endpoint                       | Method | Description                     |
+| ------------------------------ | ------ | ------------------------------- |
+| `/health`                      | GET    | Health check                    |
+| `/stats`                       | GET    | Service statistics              |
+| `/orderbooks`                  | GET    | List all markets and assets     |
+| `/orderbook/{market_id}`       | GET    | All orderbooks for a market     |
+| `/orderbook/{market_id}/{asset_id}` | GET    | Specific orderbook         |
+| `/bbo/{market_id}`             | GET    | BBOs for all assets in a market |
+| `/bbo/{market_id}/{asset_id}`  | GET    | Specific BBO                    |
+
+**Path Parameters:**
+
+- `market_id` - Market identifier (condition_id from exchange)
+- `asset_id` - Asset identifier (clob_token_id from exchange)
 
 **Query Parameters:**
 
@@ -427,11 +424,13 @@ tokio::spawn(async move {
 
 ```json
 {
-  "aggregate_id": "AGG123",
+  "market": {
+    "market_id": "0x1234abcd...",
+    "questions": {"polymarket": "Will the Fed raise rates?"},
+    "slugs": {"polymarket": "fed-decision-january"}
+  },
   "asset_id": "token456",
-  "market_id": "market789",
-  "market_question": "Will the Fed raise rates?",
-  "market_slug": "fed-decision-january",
+  "market_id": "0x1234abcd...",
   "platforms": ["polymarket", "kalshi"],
   "bids": [
     {
@@ -444,8 +443,6 @@ tokio::spawn(async move {
     }
   ],
   "asks": [...],
-  "polymarket_best_bid": "0.55",
-  "polymarket_best_ask": "0.57",
   "exchange_best_bid": {"polymarket": "0.55", "kalshi": "0.54"},
   "exchange_best_ask": {"polymarket": "0.57", "kalshi": "0.58"},
   "system_best_bid": "0.55",
@@ -480,7 +477,7 @@ tokio::spawn(async move {
 ```json
 {
   "type": "subscribe",
-  "subjects": ["agg123.market456.token789", "agg123.*.token789"]
+  "subjects": ["0x1234abcd.token789", "0x1234abcd.*"]
 }
 ```
 
@@ -488,7 +485,7 @@ tokio::spawn(async move {
 ```json
 {
   "type": "unsubscribe",
-  "subjects": ["agg123.market456.token789"]
+  "subjects": ["0x1234abcd.token789"]
 }
 ```
 
@@ -503,10 +500,8 @@ tokio::spawn(async move {
 ```json
 {
   "type": "snapshot",
-  "aggregate_id": "agg123",
-  "hashed_market_id": "market456",
-  "clob_token_id": "token789",
-  "market_id": "original-market-id",
+  "market_id": "0x1234abcd...",
+  "asset_id": "token789",
   "platforms": ["polymarket", "kalshi"],
   "bids": [
     {
@@ -529,10 +524,8 @@ tokio::spawn(async move {
 ```json
 {
   "type": "price_change",
-  "aggregate_id": "agg123",
-  "hashed_market_id": "market456",
-  "clob_token_id": "token789",
-  "market_id": "original-market-id",
+  "market_id": "0x1234abcd...",
+  "asset_id": "token789",
   "changes": [
     {
       "price": "0.55",
@@ -560,7 +553,7 @@ tokio::spawn(async move {
 ```json
 {
   "type": "subscribed",
-  "subjects": ["agg123.market456.token789"]
+  "subjects": ["0x1234abcd.token789"]
 }
 ```
 
@@ -575,10 +568,13 @@ tokio::spawn(async move {
 
 #### Subject Format
 
-Subjects follow the pattern: `{aggregate_id}.{hashed_market_id}.{clob_token_id}`
+Subjects follow the pattern: `{market_id}.{asset_id}`
+
+- `market_id` - Market identifier (condition_id from exchange)
+- `asset_id` - Asset identifier (clob_token_id from exchange)
 
 Wildcards supported:
-- `*` matches any single segment (e.g., `agg123.*.token789`)
+- `*` matches any single segment (e.g., `0x1234abcd.*` for all assets in a market)
 - Wildcard subscriptions do not receive initial snapshots
 
 ---

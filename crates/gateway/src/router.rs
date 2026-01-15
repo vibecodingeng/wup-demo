@@ -5,7 +5,7 @@
 
 use crate::client::{ClientRegistry, ClientState};
 use crate::error::{GatewayError, Result};
-use crate::protocol::{OrderbookHttpResponse, PriceChangeData, ServerMessage};
+use crate::protocol::{MarketOrderbooksHttpResponse, OrderbookHttpResponse, PriceChangeData, ServerMessage};
 use chrono::Utc;
 use futures::StreamExt;
 use metrics::counter;
@@ -110,18 +110,15 @@ impl ChangeRouter {
         counter!("gateway_changes_received_total").increment(1);
 
         debug!(
-            "Received price change for {}/{}/{} ({} changes)",
-            change.aggregate_id,
-            change.hashed_market_id,
-            change.clob_token_id,
+            "Received price change for {}/{} ({} changes)",
+            change.market_id,
+            change.asset_id,
             change.changes.len()
         );
 
         // Build the client subscription subject (without the orderbook.changes. prefix)
-        let client_subject = format!(
-            "{}.{}.{}",
-            change.aggregate_id, change.hashed_market_id, change.clob_token_id
-        );
+        // Format: {market_id}.{asset_id}
+        let client_subject = format!("{}.{}", change.market_id, change.asset_id);
 
         // Find matching clients
         let clients = self.registry.get_matching_subscribers(&client_subject);
@@ -160,31 +157,39 @@ impl ChangeRouter {
 
     /// Send initial snapshot to a client for a subscription.
     pub async fn send_snapshot(&self, client: &Arc<ClientState>, subject: &str) -> Result<()> {
-        // Parse subject to get aggregate_id, hashed_market_id, clob_token_id
-        // Subject format: {aggregate_id}.{hashed_market_id}.{clob_token_id}
-        // or with wildcards which we skip for snapshots
+        // Parse subject to get market_id, asset_id
+        // Subject format: {market_id}.{asset_id}
+        // or with wildcards like {market_id}.* for all assets in a market
+
+        let parts: Vec<&str> = subject.split('.').collect();
+
+        // Handle market wildcard: {market_id}.* or {market_id}.>
+        // This sends snapshots for ALL assets in that market
+        if parts.len() == 2 && (parts[1] == "*" || parts[1] == ">") {
+            let market_id = parts[0];
+            return self.send_market_snapshots(client, market_id).await;
+        }
+
+        // Skip other wildcard patterns (e.g., *.* or complex patterns)
         if subject.contains('*') || subject.contains('>') {
-            // Can't fetch snapshot for wildcard subscriptions
-            debug!("Skipping snapshot for wildcard subscription: {}", subject);
+            debug!("Skipping snapshot for complex wildcard subscription: {}", subject);
             return Ok(());
         }
 
-        let parts: Vec<&str> = subject.split('.').collect();
-        if parts.len() < 3 {
+        if parts.len() < 2 {
             return Err(GatewayError::InvalidSubject(format!(
-                "Subject must have at least 3 parts: {}",
+                "Subject must have at least 2 parts: {}",
                 subject
             )));
         }
 
-        let aggregate_id = parts[0];
-        let hashed_market_id = parts[1];
-        let clob_token_id = parts[2];
+        let market_id = parts[0];
+        let asset_id = parts[1];
 
-        // Fetch orderbook from HTTP API
+        // Fetch orderbook from HTTP API (2-level hierarchy)
         let url = format!(
-            "{}/orderbook/{}/{}/{}",
-            self.config.orderbook_service_url, aggregate_id, hashed_market_id, clob_token_id
+            "{}/orderbook/{}/{}",
+            self.config.orderbook_service_url, market_id, asset_id
         );
 
         debug!("Fetching snapshot from: {}", url);
@@ -203,16 +208,52 @@ impl ChangeRouter {
         let orderbook: OrderbookHttpResponse = response.json().await?;
 
         // Convert to orderbook snapshot message
-        let orderbook_data = orderbook.to_orderbook_data(
-            aggregate_id.to_string(),
-            hashed_market_id.to_string(),
-            Utc::now().timestamp_micros(),
-        );
+        let orderbook_data = orderbook.to_orderbook_data(Utc::now().timestamp_micros());
 
         // Send snapshot to client (full orderbook on initial subscribe)
         client.send(ServerMessage::Snapshot(orderbook_data))?;
 
         counter!("gateway_snapshots_sent_total").increment(1);
+
+        Ok(())
+    }
+
+    /// Send snapshots for all assets in a market.
+    /// Used for wildcard subscriptions like {market_id}.*
+    async fn send_market_snapshots(&self, client: &Arc<ClientState>, market_id: &str) -> Result<()> {
+        let url = format!(
+            "{}/orderbook/{}",
+            self.config.orderbook_service_url, market_id
+        );
+
+        debug!("Fetching market snapshots from: {}", url);
+
+        let response = self.http_client.get(&url).send().await?;
+
+        if !response.status().is_success() {
+            warn!(
+                "Failed to fetch market snapshots for {}: {}",
+                market_id,
+                response.status()
+            );
+            return Ok(()); // Don't error, just skip snapshots
+        }
+
+        let market_response: MarketOrderbooksHttpResponse = response.json().await?;
+
+        info!(
+            "Sending {} snapshots for market {} to client {}",
+            market_response.asset_count, market_id, client.id
+        );
+
+        let timestamp_us = Utc::now().timestamp_micros();
+
+        // Send a snapshot for each asset in the market
+        for orderbook in market_response.assets {
+            let orderbook_data = orderbook.to_orderbook_data(timestamp_us);
+            client.send(ServerMessage::Snapshot(orderbook_data))?;
+            counter!("gateway_snapshots_sent_total").increment(1);
+        }
 
         Ok(())
     }

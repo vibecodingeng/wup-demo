@@ -105,14 +105,10 @@ pub struct AggregatedPriceLevel {
 /// Contains the full aggregated orderbook state after the change.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct OrderbookChange {
-    /// Event aggregate identifier.
-    pub aggregate_id: String,
-    /// Hashed market identifier (first 16 chars of SHA256).
-    pub hashed_market_id: String,
-    /// CLOB token identifier.
-    pub clob_token_id: String,
-    /// Original market identifier.
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
     /// List of platforms contributing to this orderbook.
     pub platforms: Vec<String>,
     /// Aggregated bid price levels (sorted by price descending).
@@ -166,14 +162,10 @@ pub struct AggregatedPriceLevelChange {
 /// Contains aggregated state for each changed price level with explicit side.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AggregatedPriceChangeEvent {
-    /// Event aggregate identifier.
-    pub aggregate_id: String,
-    /// Hashed market identifier (first 16 chars of SHA256).
-    pub hashed_market_id: String,
-    /// CLOB token identifier.
-    pub clob_token_id: String,
-    /// Original market identifier.
+    /// Market identifier (condition_id from exchange).
     pub market_id: String,
+    /// Asset identifier (clob_token_id from exchange).
+    pub asset_id: String,
     /// All changed price levels with explicit side and platform breakdown.
     pub changes: Vec<AggregatedPriceLevelChange>,
     /// Timestamp in microseconds for latency tracking.

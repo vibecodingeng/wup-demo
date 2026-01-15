@@ -187,11 +187,9 @@ impl OrderbookService {
         );
 
         // Try to fetch and cache market metadata if not already cached
-        // Use hashed_market_id for caching
-        let hashed_market_id = crate::hash_market_id(&normalized.market_id);
         if self
             .store
-            .get_cached_market_metadata(&hashed_market_id)
+            .get_cached_market_metadata(&normalized.market_id)
             .is_none()
         {
             if let Err(e) = self
@@ -199,7 +197,6 @@ impl OrderbookService {
                     &normalized.platform,
                     &normalized.market_id,
                     &normalized.clob_token_id,
-                    &hashed_market_id,
                 )
                 .await
             {
@@ -212,7 +209,7 @@ impl OrderbookService {
 
         // Publish change to NATS for gateway consumption (if enabled)
         if self.config.publish_changes {
-            if let Err(e) = self.publish_change(&normalized, &hashed_market_id).await {
+            if let Err(e) = self.publish_change(&normalized).await {
                 warn!("Failed to publish change: {:?}", e);
             }
         }
@@ -233,17 +230,10 @@ impl OrderbookService {
 
     /// Publish aggregated price change event to NATS for gateway consumption.
     /// Fetches the current aggregated state for each changed price level.
-    async fn publish_change(
-        &self,
-        msg: &NormalizedOrderbook,
-        hashed_market_id: &str,
-    ) -> Result<()> {
+    async fn publish_change(&self, msg: &NormalizedOrderbook) -> Result<()> {
         use normalizer::schema::{
             AggregatedPriceChangeEvent, AggregatedPriceLevelChange, OrderSide, PlatformEntry,
         };
-
-        // The aggregate_id is the hashed_market_id when using legacy apply
-        let aggregate_id = hashed_market_id;
 
         // Collect affected prices with their side
         let mut affected_prices: Vec<(String, OrderSide)> = Vec::new();
@@ -280,17 +270,15 @@ impl OrderbookService {
         let mut changes: Vec<AggregatedPriceLevelChange> = Vec::new();
 
         for (price, side) in affected_prices {
-            // Fetch the current aggregated state at this price
+            // Fetch the current aggregated state at this price (using 2-level lookup)
             let level = match side {
                 OrderSide::Buy => self.store.get_aggregated_bid_level(
-                    aggregate_id,
-                    hashed_market_id,
+                    &msg.market_id,
                     &msg.clob_token_id,
                     &price,
                 ),
                 OrderSide::Sell => self.store.get_aggregated_ask_level(
-                    aggregate_id,
-                    hashed_market_id,
+                    &msg.market_id,
                     &msg.clob_token_id,
                     &price,
                 ),
@@ -326,20 +314,19 @@ impl OrderbookService {
             changes.push(change);
         }
 
-        // Construct aggregated price change event
+        // Construct aggregated price change event with 2-level identifiers
         let event = AggregatedPriceChangeEvent {
-            aggregate_id: aggregate_id.to_string(),
-            hashed_market_id: hashed_market_id.to_string(),
-            clob_token_id: msg.clob_token_id.clone(),
             market_id: msg.market_id.clone(),
+            asset_id: msg.clob_token_id.clone(),
             changes,
             timestamp_us: Utc::now().timestamp_micros(),
         };
 
         // Publish to NATS Core (fire-and-forget for lowest latency)
+        // Subject format: orderbook.changes.{market_id}.{asset_id}
         let subject = format!(
-            "orderbook.changes.{}.{}.{}",
-            aggregate_id, hashed_market_id, msg.clob_token_id
+            "orderbook.changes.{}.{}",
+            msg.market_id, msg.clob_token_id
         );
         let change_bytes = serde_json::to_vec(&event)?;
 
@@ -366,7 +353,6 @@ impl OrderbookService {
         platform: &str,
         market_id: &str,
         clob_token_id: &str,
-        hashed_market_id: &str,
     ) -> Result<()> {
         use std::collections::HashMap;
 
@@ -393,17 +379,12 @@ impl OrderbookService {
             }
             slugs.insert(platform.to_string(), slug.clone());
 
-            let metadata = MarketMetadata {
-                questions,
-                slugs,
-                event_aggregate_id: market_id.to_string(),
-                market_aggregate_id: None,
-            };
+            let metadata = MarketMetadata { questions, slugs };
 
-            self.store.cache_market_metadata(hashed_market_id, metadata);
+            self.store.cache_market_metadata(market_id, metadata);
             info!(
                 "Cached market metadata for {} (via token {}): question={:?}, slug={}",
-                hashed_market_id, clob_token_id, market.question, slug
+                market_id, clob_token_id, market.question, slug
             );
             return Ok(());
         }
@@ -420,17 +401,12 @@ impl OrderbookService {
             }
             slugs.insert(platform.to_string(), slug.clone());
 
-            let metadata = MarketMetadata {
-                questions,
-                slugs,
-                event_aggregate_id: market_id.to_string(),
-                market_aggregate_id: None,
-            };
+            let metadata = MarketMetadata { questions, slugs };
 
-            self.store.cache_market_metadata(hashed_market_id, metadata);
+            self.store.cache_market_metadata(market_id, metadata);
             info!(
                 "Cached market metadata for {}: question={:?}, slug={}",
-                hashed_market_id, market.question, slug
+                market_id, market.question, slug
             );
         }
 
@@ -441,7 +417,7 @@ impl OrderbookService {
     fn update_metrics(&self) {
         let stats = self.store.stats();
         gauge!("orderbook_service_markets_total").set(stats.market_count as f64);
-        gauge!("orderbook_service_tokens_total").set(stats.total_tokens as f64);
+        gauge!("orderbook_service_tokens_total").set(stats.total_assets as f64);
         gauge!("orderbook_service_snapshots_total").set(stats.total_snapshots as f64);
         gauge!("orderbook_service_deltas_total").set(stats.total_deltas as f64);
     }
