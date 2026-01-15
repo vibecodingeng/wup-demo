@@ -3,7 +3,6 @@
 //! This module provides a reusable Redis client that can be shared across
 //! multiple services (event_service, orderbook_service, aggregator, etc.).
 
-use crate::aggregate::AggregateMetadata;
 use crate::error::Result;
 use crate::polymarket::{EventData, MarketData, TokenMapping};
 use redis::AsyncCommands;
@@ -13,9 +12,6 @@ use tracing::{debug, info};
 
 /// Redis key prefix for events: event:{platform}:{slug}
 pub const EVENT_KEY_PREFIX: &str = "event:";
-
-/// Redis key prefix for aggregates: aggregate:{aggregate_id}
-pub const AGGREGATE_KEY_PREFIX: &str = "aggregate:";
 
 /// Redis key prefix for condition mappings: condition:{platform}:{condition_id}
 pub const CONDITION_KEY_PREFIX: &str = "condition:";
@@ -221,110 +217,6 @@ impl SharedRedisClient {
     }
 
     // =========================================================================
-    // Aggregate Mapping Operations
-    // =========================================================================
-
-    /// Set mapping from platform event slug to aggregate ID.
-    /// Key format: {platform}:event:{slug} -> aggregate_id
-    pub async fn set_event_mapping(
-        &self,
-        platform: &str,
-        slug: &str,
-        aggregate_id: &str,
-    ) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}:event:{}", platform, slug);
-
-        conn.set::<_, _, ()>(&key, aggregate_id).await?;
-        info!(
-            "Mapped {}:{} -> aggregate {}",
-            platform, slug, aggregate_id
-        );
-
-        Ok(())
-    }
-
-    /// Get aggregate ID for a platform's event slug.
-    /// Key format: {platform}:event:{slug}
-    pub async fn get_aggregate_id(&self, platform: &str, slug: &str) -> Result<Option<String>> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}:event:{}", platform, slug);
-
-        let id: Option<String> = conn.get(&key).await?;
-        Ok(id)
-    }
-
-    /// Delete mapping from platform event slug to aggregate ID.
-    pub async fn delete_event_mapping(&self, platform: &str, slug: &str) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}:event:{}", platform, slug);
-
-        conn.del::<_, ()>(&key).await?;
-        info!("Deleted mapping {}:{}", platform, slug);
-
-        Ok(())
-    }
-
-    /// Store aggregate metadata.
-    /// Key format: aggregate:{aggregate_id}
-    pub async fn store_aggregate(&self, metadata: &AggregateMetadata) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}{}", AGGREGATE_KEY_PREFIX, metadata.aggregate_id);
-        let json = serde_json::to_string(metadata)?;
-
-        conn.set::<_, _, ()>(&key, &json).await?;
-        info!("Stored aggregate '{}'", metadata.aggregate_id);
-
-        Ok(())
-    }
-
-    /// Get aggregate metadata.
-    pub async fn get_aggregate(&self, aggregate_id: &str) -> Result<Option<AggregateMetadata>> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}{}", AGGREGATE_KEY_PREFIX, aggregate_id);
-
-        let json: Option<String> = conn.get(&key).await?;
-
-        match json {
-            Some(j) => {
-                let data: AggregateMetadata = serde_json::from_str(&j)?;
-                debug!("Retrieved aggregate '{}' from Redis", aggregate_id);
-                Ok(Some(data))
-            }
-            None => Ok(None),
-        }
-    }
-
-    /// Delete aggregate metadata.
-    pub async fn delete_aggregate(&self, aggregate_id: &str) -> Result<()> {
-        let mut conn = self.get_connection().await?;
-        let key = format!("{}{}", AGGREGATE_KEY_PREFIX, aggregate_id);
-
-        conn.del::<_, ()>(&key).await?;
-        info!("Deleted aggregate '{}'", aggregate_id);
-
-        Ok(())
-    }
-
-    /// List all stored aggregate IDs.
-    pub async fn list_aggregates(&self) -> Result<Vec<String>> {
-        let mut conn = self.get_connection().await?;
-        let pattern = format!("{}*", AGGREGATE_KEY_PREFIX);
-
-        let keys: Vec<String> = conn.keys(&pattern).await?;
-        let ids: Vec<String> = keys
-            .into_iter()
-            .map(|k| {
-                k.strip_prefix(AGGREGATE_KEY_PREFIX)
-                    .unwrap_or(&k)
-                    .to_string()
-            })
-            .collect();
-
-        Ok(ids)
-    }
-
-    // =========================================================================
     // Condition ID Mapping Operations
     // =========================================================================
 
@@ -436,6 +328,7 @@ mod tests {
     #[test]
     fn test_key_prefixes() {
         assert_eq!(EVENT_KEY_PREFIX, "event:");
-        assert_eq!(AGGREGATE_KEY_PREFIX, "aggregate:");
+        assert_eq!(CONDITION_KEY_PREFIX, "condition:");
+        assert_eq!(MARKET_KEY_PREFIX, "market:");
     }
 }

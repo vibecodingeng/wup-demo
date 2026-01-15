@@ -149,30 +149,23 @@ pub trait ExchangeAdapter: Send + Sync {
 
 ### Multi-Platform Aggregation
 
-Different platforms use different slugs for the same event. Redis mappings unify them:
+Multiple platforms can contribute data to the same orderbook. Each price level tracks sizes per platform.
 
-```
-polymarket:event:us-election  →  AGG123
-kalshi:event:2024-president   →  AGG123
-```
-
-Storage hierarchy: `aggregate_id` → `market_id` → `asset_id` → `Orderbook`
+Storage hierarchy: `market_id` → `asset_id` → `Orderbook`
 
 ## NATS Subject Conventions
 
-| Pattern                                                    | Purpose                 | Example                                  |
-| ---------------------------------------------------------- | ----------------------- | ---------------------------------------- |
-| `market.{platform}.{asset_id}`                             | Raw exchange messages   | `market.polymarket.12345`                |
-| `normalized.{platform}.{market_id}.{asset_id}`             | Normalized orderbooks   | `normalized.polymarket.abc.12345`        |
-| `orderbook.changes.{agg_id}.{hashed_market_id}.{token_id}` | Aggregated price deltas | `orderbook.changes.abc123.def456.token1` |
+| Pattern                                        | Purpose                 | Example                           |
+| ---------------------------------------------- | ----------------------- | --------------------------------- |
+| `market.{platform}.{asset_id}`                 | Raw exchange messages   | `market.polymarket.12345`         |
+| `normalized.{platform}.{market_id}.{asset_id}` | Normalized orderbooks   | `normalized.polymarket.abc.12345` |
+| `orderbook.changes.{market_id}.{asset_id}`     | Aggregated price deltas | `orderbook.changes.abc123.token1` |
 
 ## Redis Key Conventions
 
 | Pattern                   | Purpose                           |
 | ------------------------- | --------------------------------- |
 | `event:{platform}:{slug}` | Full event data (markets, tokens) |
-| `{platform}:event:{slug}` | Maps to aggregate_id              |
-| `aggregate:{id}`          | Aggregate metadata                |
 
 ## Crate Dependencies
 

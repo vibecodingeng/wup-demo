@@ -4,8 +4,8 @@
 
 pub mod api;
 pub mod error;
-pub mod redis_client;
 
 pub use api::{create_router, AppState};
 pub use error::{Error, Result};
-pub use redis_client::RedisClient;
+// Re-export SharedRedisClient from external_services for convenience
+pub use external_services::SharedRedisClient;

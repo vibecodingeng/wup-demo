@@ -498,8 +498,6 @@ impl Orderbook {
 /// Platform-specific titles/slugs for multi-platform support.
 #[derive(Debug, Clone, Default, Serialize)]
 pub struct EventInfo {
-    /// Event aggregate ID.
-    pub event_aggregate_id: String,
     /// Platform-specific event titles: {"polymarket": "title", "kalshi": "title"}
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub titles: HashMap<String, String>,

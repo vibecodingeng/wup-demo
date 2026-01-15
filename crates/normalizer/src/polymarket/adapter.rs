@@ -26,16 +26,21 @@ impl ExchangeAdapter for PolymarketAdapter {
     const FILTER_SUBJECT: &'static str = "market.polymarket.>";
 
     fn parse_and_transform(&self, payload: &str) -> Result<Vec<NormalizedOrderbook>> {
-        let parsed = ParsedMessage::parse(payload)?;
+        let parsed_messages = ParsedMessage::parse_all(payload)?;
         let normalized_at = Utc::now().to_rfc3339();
 
-        let results = match parsed {
-            ParsedMessage::Book(book) => {
-                vec![transform_book(book, &normalized_at)]
+        let mut results = Vec::new();
+        for parsed in parsed_messages {
+            match parsed {
+                ParsedMessage::Book(book) => {
+                    results.push(transform_book(book, &normalized_at));
+                }
+                ParsedMessage::PriceChange(pc) => {
+                    results.extend(transform_price_change(pc, &normalized_at));
+                }
+                ParsedMessage::Unknown(_) => {}
             }
-            ParsedMessage::PriceChange(pc) => transform_price_change(pc, &normalized_at),
-            ParsedMessage::Unknown(_) => vec![],
-        };
+        }
 
         Ok(results)
     }
@@ -153,22 +158,8 @@ enum ParsedMessage {
 }
 
 impl ParsedMessage {
-    fn parse(json: &str) -> Result<Self> {
-        // First try to parse as a generic JSON value to inspect structure
-        let value: serde_json::Value = serde_json::from_str(json)?;
-
-        // Handle array wrapper - some messages come as arrays
-        let obj = if value.is_array() {
-            // If it's an array, try to get the first element
-            value
-                .as_array()
-                .and_then(|arr| arr.first())
-                .cloned()
-                .unwrap_or(value)
-        } else {
-            value
-        };
-
+    /// Parse a single JSON value into a ParsedMessage.
+    fn parse_value(obj: serde_json::Value) -> Result<Self> {
         // Extract event_type from the object
         let event_type = obj
             .get("event_type")
@@ -187,6 +178,25 @@ impl ParsedMessage {
             other => Ok(ParsedMessage::Unknown(other.to_string())),
         }
     }
+
+    /// Parse JSON that may be a single object or an array of objects.
+    fn parse_all(json: &str) -> Result<Vec<Self>> {
+        let value: serde_json::Value = serde_json::from_str(json)?;
+
+        if value.is_array() {
+            // Handle array - parse each element
+            let arr = value.as_array().unwrap();
+            let mut results = Vec::with_capacity(arr.len());
+            for item in arr {
+                results.push(Self::parse_value(item.clone())?);
+            }
+            Ok(results)
+        } else {
+            // Single object
+            Ok(vec![Self::parse_value(value)?])
+        }
+    }
+
 }
 
 // ============================================================================
@@ -417,6 +427,50 @@ mod tests {
         let result = adapter.parse_and_transform(json).unwrap();
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].clob_token_id, "abc123");
+    }
+
+    #[test]
+    fn test_parse_multiple_books_in_array() {
+        let adapter = PolymarketAdapter::new();
+        // Test multiple book messages in a single array (as Polymarket sends them)
+        let json = r#"[
+            {
+                "event_type": "book",
+                "asset_id": "asset1",
+                "market": "market-1",
+                "bids": [{"price": "0.55", "size": "100"}],
+                "asks": [{"price": "0.60", "size": "50"}],
+                "timestamp": "1704067200000",
+                "hash": "xyz1"
+            },
+            {
+                "event_type": "book",
+                "asset_id": "asset2",
+                "market": "market-1",
+                "bids": [{"price": "0.45", "size": "200"}],
+                "asks": [{"price": "0.50", "size": "100"}],
+                "timestamp": "1704067200000",
+                "hash": "xyz2"
+            },
+            {
+                "event_type": "book",
+                "asset_id": "asset3",
+                "market": "market-2",
+                "bids": [{"price": "0.30", "size": "300"}],
+                "asks": [{"price": "0.35", "size": "150"}],
+                "timestamp": "1704067200000",
+                "hash": "xyz3"
+            }
+        ]"#;
+
+        let result = adapter.parse_and_transform(json).unwrap();
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].clob_token_id, "asset1");
+        assert_eq!(result[0].market_id, "market-1");
+        assert_eq!(result[1].clob_token_id, "asset2");
+        assert_eq!(result[1].market_id, "market-1");
+        assert_eq!(result[2].clob_token_id, "asset3");
+        assert_eq!(result[2].market_id, "market-2");
     }
 
     #[test]

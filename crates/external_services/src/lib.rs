@@ -20,14 +20,9 @@
 //! let market = redis.find_market_by_id("polymarket", "market123").await?;
 //! ```
 
-pub mod aggregate;
 pub mod error;
 pub mod polymarket;
 pub mod redis_client;
 
-pub use aggregate::{
-    get_aggregate_id, get_aggregate_metadata, set_aggregate_metadata, set_event_mapping,
-    AggregateMetadata, CreateAggregateRequest, MapPlatformRequest, AGGREGATE_KEY_PREFIX,
-};
 pub use error::{Error, Result};
 pub use redis_client::{ConditionMapping, MarketSlugMapping, SharedRedisClient};

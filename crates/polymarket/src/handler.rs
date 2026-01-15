@@ -103,13 +103,9 @@ impl PolymarketHandler {
         }
     }
 
-    /// Extract asset_id from a market event message.
-    fn extract_asset_id(msg: &str) -> Option<String> {
-        if let Ok(value) = serde_json::from_str::<serde_json::Value>(msg) {
-            value.get("asset_id").and_then(|v| v.as_str()).map(String::from)
-        } else {
-            None
-        }
+    /// Extract asset_id from a market event message (single object).
+    fn extract_asset_id_from_value(value: &serde_json::Value) -> Option<String> {
+        value.get("asset_id").and_then(|v| v.as_str()).map(String::from)
     }
 
     /// Build NATS subject for the message.
@@ -125,25 +121,16 @@ impl PolymarketHandler {
         }
     }
 
-    /// Truncate an ID to max 16 characters for NATS subject (legacy).
-    fn truncate_id(id: &str) -> &str {
-        if id.len() > 16 { &id[..16] } else { id }
+    /// Add received_at timestamp to a JSON value.
+    fn add_received_timestamp_to_value(value: &mut serde_json::Value, received_at: i64) {
+        if let Some(obj) = value.as_object_mut() {
+            obj.insert(
+                "received_at".to_string(),
+                serde_json::Value::Number(received_at.into()),
+            );
+        }
     }
 
-    /// Add received_at timestamp to the JSON message.
-    fn add_received_timestamp(msg: &str, received_at: i64) -> String {
-        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(msg) {
-            if let Some(obj) = value.as_object_mut() {
-                obj.insert(
-                    "received_at".to_string(),
-                    serde_json::Value::Number(received_at.into()),
-                );
-                return serde_json::to_string(&value).unwrap_or_else(|_| msg.to_string());
-            }
-        }
-        // If parsing fails, return original message
-        msg.to_string()
-    }
 }
 
 #[async_trait]
@@ -167,25 +154,52 @@ impl WsHandler for PolymarketHandler {
 
         debug!("[{}] Received message: {}", self.worker_id, msg);
 
-        // Extract asset_id for subject routing
-        let asset_id = Self::extract_asset_id(msg);
-
-        // Build subject based on token mapping
-        let subject = match &asset_id {
-            Some(aid) => self.build_subject(aid),
-            None => "market.polymarket.raw".to_string(),
+        // Parse the message as JSON
+        let value: serde_json::Value = match serde_json::from_str(msg) {
+            Ok(v) => v,
+            Err(e) => {
+                warn!("[{}] Failed to parse message as JSON: {}", self.worker_id, e);
+                return Ok(());
+            }
         };
 
-        // Add received_at timestamp to the message
-        let payload = Self::add_received_timestamp(msg, received_at);
+        // Handle arrays by processing each element separately
+        let messages: Vec<serde_json::Value> = if value.is_array() {
+            value.as_array().cloned().unwrap_or_default()
+        } else {
+            vec![value]
+        };
 
-        // Publish to NATS (fast/fire-and-forget for low latency)
-        self.nats_client
-            .publish_fast(&subject, bytes::Bytes::from(payload))
-            .await
-            .map_err(|e| common::error::Error::Generic(e.to_string()))?;
+        for mut msg_value in messages {
+            // Add received_at timestamp
+            Self::add_received_timestamp_to_value(&mut msg_value, received_at);
 
-        counter!("aggregator_messages_published_total", "platform" => "polymarket").increment(1);
+            // Extract asset_id for subject routing
+            let asset_id = Self::extract_asset_id_from_value(&msg_value);
+
+            // Build subject based on token mapping
+            let subject = match &asset_id {
+                Some(aid) => self.build_subject(aid),
+                None => "market.polymarket.raw".to_string(),
+            };
+
+            // Serialize the message
+            let payload = match serde_json::to_string(&msg_value) {
+                Ok(s) => s,
+                Err(e) => {
+                    warn!("[{}] Failed to serialize message: {}", self.worker_id, e);
+                    continue;
+                }
+            };
+
+            // Publish to NATS (fast/fire-and-forget for low latency)
+            self.nats_client
+                .publish_fast(&subject, bytes::Bytes::from(payload))
+                .await
+                .map_err(|e| common::error::Error::Generic(e.to_string()))?;
+
+            counter!("aggregator_messages_published_total", "platform" => "polymarket").increment(1);
+        }
 
         Ok(())
     }

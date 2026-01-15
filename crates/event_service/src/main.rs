@@ -5,7 +5,7 @@
 //! Periodically refreshes cached events from exchange APIs.
 
 use anyhow::Result;
-use event_service::{create_router, AppState, RedisClient};
+use event_service::{create_router, AppState, SharedRedisClient};
 use external_services::polymarket::PolymarketClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use std::sync::Arc;
@@ -14,7 +14,7 @@ use tracing::{error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Refresh all events stored in Redis.
-async fn refresh_all_events(redis: &RedisClient, polymarket: &PolymarketClient) {
+async fn refresh_all_events(redis: &SharedRedisClient, polymarket: &PolymarketClient) {
     let events = match redis.list_events().await {
         Ok(e) => e,
         Err(e) => {
@@ -113,7 +113,7 @@ async fn main() -> Result<()> {
 
     // Connect to Redis
     info!("Connecting to Redis at {}...", redis_url);
-    let redis_client = RedisClient::new(&redis_url)?;
+    let redis_client = SharedRedisClient::new(&redis_url)?;
     info!("Connected to Redis");
 
     // Create Polymarket client
@@ -183,13 +183,6 @@ async fn main() -> Result<()> {
     info!("  GET  /event/{{platform}}/{{slug}}            - Get event data");
     info!("  GET  /event/{{platform}}/{{slug}}/tokens     - Get token mappings");
     info!("  POST /event/{{platform}}/{{slug}}/refresh    - Refresh event from API");
-    info!("  GET  /aggregates                          - List all aggregates");
-    info!("  POST /aggregate                           - Create aggregate");
-    info!("  GET  /aggregate/{{aggregate_id}}            - Get aggregate");
-    info!("  DELETE /aggregate/{{aggregate_id}}          - Delete aggregate");
-    info!("  POST /aggregate/{{aggregate_id}}/map        - Map platform:slug to aggregate");
-    info!("  DELETE /aggregate/{{agg_id}}/map/{{plat}}/{{slug}} - Unmap");
-    info!("  GET  /mapping/{{platform}}/{{slug}}          - Get aggregate for mapping");
 
     // Run HTTP server
     axum::serve(listener, router).await?;

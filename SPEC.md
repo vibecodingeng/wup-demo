@@ -100,8 +100,8 @@ This platform is built for professional traders and market makers who require:
 │  ┌─────────────────────┐    ┌─────────────────────┐    ┌─────────────────┐  │
 │  │   Event Service     │    │       Redis         │    │      NATS       │  │
 │  │  - Metadata cache   │◀──▶│  - Event data       │    │  - Message bus  │  │
-│  │  - Token mappings   │    │  - Aggregate maps   │    │  - JetStream    │  │
-│  │  - Background sync  │    │  - Token mappings   │    │  - Clustering   │  │
+│  │  - Token mappings   │    │  - Token mappings   │    │  - JetStream    │  │
+│  │  - Background sync  │    │                     │    │  - Clustering   │  │
 │  └─────────────────────┘    └─────────────────────┘    └─────────────────┘  │
 └─────────────────────────────────────────────────────────────────────────────┘
 ```
@@ -199,28 +199,6 @@ struct PriceLevel {
     price: String,    // Decimal as string (precision preserved)
     size: String,
 }
-```
-
-### Aggregate ID Mapping
-
-Different platforms use different identifiers for the same event:
-
-```
-┌─────────────────────────────────────────────────────────────────┐
-│                    Aggregate ID Mapping                         │
-├─────────────────────────────────────────────────────────────────┤
-│                                                                 │
-│  Polymarket: "us-election-2024"     ─┐                          │
-│                                      ├──▶ AGG_US_PRES_2024     │
-│  Kalshi: "PRES-2024-DEM"            ─┘                          │
-│                                                                 │
-│  Redis Keys:                                                    │
-│    polymarket:event:us-election-2024  →  AGG_US_PRES_2024       │
-│    kalshi:event:PRES-2024-DEM         →  AGG_US_PRES_2024       │
-│    event:polymarket:us-election-2024  →  {full event JSON}      │
-│    aggregate:AGG_US_PRES_2024        →  {metadata JSON}         │
-│                                                                 │
-└─────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -461,11 +439,6 @@ tokio::spawn(async move {
 | `/event/{platform}/{slug}`         | GET        | Get event data       |
 | `/event/{platform}/{slug}/tokens`  | GET        | Get token mappings   |
 | `/event/{platform}/{slug}/refresh` | POST       | Refresh from API     |
-| `/aggregates`                      | GET        | List aggregates      |
-| `/aggregate`                       | POST       | Create aggregate     |
-| `/aggregate/{id}`                  | GET/DELETE | Get/delete aggregate |
-| `/aggregate/{id}/map`              | POST       | Map platform:slug    |
-| `/mapping/{platform}/{slug}`       | GET        | Get aggregate ID     |
 
 ### Gateway Service - WebSocket API (`localhost:8082`)
 
