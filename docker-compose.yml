@@ -46,7 +46,7 @@ services:
       - REDIS_URL=redis://redis:6379
       - METRICS_PORT=9090
       - RUST_LOG=info
-      # - EVENT_SLUG=your-event-slug
+      # Aggregator auto-subscribes to all events in Redis
     depends_on:
       - nats
       - redis

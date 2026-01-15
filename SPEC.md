@@ -556,20 +556,20 @@ Wildcards supported:
 
 ### Environment Variables
 
-| Variable                  | Service          | Default                   | Description                             |
-| ------------------------- | ---------------- | ------------------------- | --------------------------------------- |
-| `NATS_URL`                | all              | `nats://localhost:4222`   | NATS server                             |
-| `REDIS_URL`               | all              | `redis://localhost:6379`  | Redis server                            |
-| `RUST_LOG`                | all              | `info`                    | Log level                               |
-| `HTTP_PORT`               | orderbook, event | 8080/8081                 | HTTP API port                           |
-| `METRICS_PORT`            | all              | 9090/9091/9092/9093       | Prometheus port                         |
-| `EVENT_SLUG`              | aggregator       | -                         | Event to subscribe                      |
-| `NATS_SUBJECT`            | orderbook        | `normalized.polymarket.>` | NATS subscription                       |
-| `REFRESH_INTERVAL_SECS`   | event            | `60`                      | Event refresh interval                  |
-| `PUBLISH_CHANGES`         | orderbook        | `false`                   | Publish changes to NATS for gateway     |
-| `WS_PORT`                 | gateway          | `8082`                    | WebSocket server port                   |
-| `ORDERBOOK_SERVICE_URL`   | gateway          | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots)  |
-| `GATEWAY_NATS_SUBJECT`    | gateway          | `orderbook.changes.>`     | NATS subject for price changes          |
+| Variable                  | Service          | Default                   | Description                              |
+| ------------------------- | ---------------- | ------------------------- | ---------------------------------------- |
+| `NATS_URL`                | all              | `nats://localhost:4222`   | NATS server                              |
+| `REDIS_URL`               | all              | `redis://localhost:6379`  | Redis server                             |
+| `RUST_LOG`                | all              | `info`                    | Log level                                |
+| `HTTP_PORT`               | orderbook, event | 8080/8081                 | HTTP API port                            |
+| `METRICS_PORT`            | all              | 9090/9091/9092/9093       | Prometheus port                          |
+| `EVENT_SLUG`              | event            | -                         | Initial event to fetch on startup        |
+| `NATS_SUBJECT`            | orderbook        | `normalized.polymarket.>` | NATS subscription                        |
+| `REFRESH_INTERVAL_SECS`   | event            | `60`                      | Event refresh interval                   |
+| `PUBLISH_CHANGES`         | orderbook        | `false`                   | Publish changes to NATS for gateway      |
+| `WS_PORT`                 | gateway          | `8082`                    | WebSocket server port                    |
+| `ORDERBOOK_SERVICE_URL`   | gateway          | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots)   |
+| `GATEWAY_NATS_SUBJECT`    | gateway          | `orderbook.changes.>`     | NATS subject for price changes           |
 
 ---
 

@@ -3,11 +3,11 @@
 mod supervisor;
 
 use anyhow::Result;
-use external_services::polymarket::{EventData, TokenMapping};
+use external_services::polymarket::TokenMapping;
+use external_services::SharedRedisClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use nats_client::NatsClient;
 use normalizer::{AdapterConfig, NormalizerService, PolymarketAdapter};
-use redis::AsyncCommands;
 use supervisor::Supervisor;
 use tokio::sync::mpsc;
 use tracing::{error, info, warn};
@@ -16,38 +16,64 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 /// Service name for Polymarket.
 const SERVICE_NAME: &str = "polymarket";
 
-/// Redis key prefix for events.
-const EVENT_KEY_PREFIX: &str = "event:";
-
-/// Fetch token mappings from Redis for a platform event slug.
-async fn fetch_token_mappings_from_redis(
-    redis_url: &str,
+/// Fetch all token mappings from Redis for all events of a platform.
+async fn fetch_all_token_mappings_from_redis(
+    redis: &SharedRedisClient,
     platform: &str,
-    event_slug: &str,
 ) -> Result<Vec<TokenMapping>> {
-    let client = redis::Client::open(redis_url)?;
-    let mut conn = client.get_multiplexed_async_connection().await?;
+    // List all events from Redis
+    let events = redis.list_events().await?;
 
-    // Key format: event:{platform}:{slug}
-    let key = format!("{}{}:{}", EVENT_KEY_PREFIX, platform, event_slug);
-    let json: Option<String> = conn.get(&key).await?;
+    // Filter for this platform's events
+    let platform_prefix = format!("{}:", platform);
+    let platform_events: Vec<&str> = events
+        .iter()
+        .filter(|e| e.starts_with(&platform_prefix))
+        .map(|e| e.strip_prefix(&platform_prefix).unwrap_or(e))
+        .collect();
 
-    match json {
-        Some(j) => {
-            let data: EventData = serde_json::from_str(&j)?;
-            info!(
-                "Fetched {} token mappings from Redis for event '{}:{}'",
-                data.tokens.len(),
-                platform,
-                event_slug
-            );
-            Ok(data.tokens)
-        }
-        None => {
-            warn!("Event '{}:{}' not found in Redis", platform, event_slug);
-            Ok(vec![])
+    if platform_events.is_empty() {
+        info!("No events found for platform '{}' in Redis", platform);
+        return Ok(vec![]);
+    }
+
+    info!(
+        "Found {} events for platform '{}': {:?}",
+        platform_events.len(),
+        platform,
+        platform_events
+    );
+
+    // Collect token mappings from all events
+    let event_count = platform_events.len();
+    let mut all_mappings = Vec::new();
+    for event_slug in platform_events {
+        match redis.get_token_mappings(platform, event_slug).await {
+            Ok(tokens) => {
+                info!(
+                    "Fetched {} token mappings from event '{}:{}'",
+                    tokens.len(),
+                    platform,
+                    event_slug
+                );
+                all_mappings.extend(tokens);
+            }
+            Err(e) => {
+                warn!(
+                    "Failed to fetch tokens for event '{}:{}': {:?}",
+                    platform, event_slug, e
+                );
+            }
         }
     }
+
+    info!(
+        "Total: {} token mappings from {} events",
+        all_mappings.len(),
+        event_count
+    );
+
+    Ok(all_mappings)
 }
 
 #[tokio::main]
@@ -88,45 +114,25 @@ async fn main() -> Result<()> {
     nats_client.ensure_market_stream(SERVICE_NAME).await?;
     nats_client.ensure_normalized_stream(SERVICE_NAME).await?;
 
-    // Get Redis URL
+    // Get Redis URL and connect
     let redis_url =
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
-
-    // Check for EVENT_SLUG (new mode) or TOKEN_IDS (legacy mode)
-    let event_slug = std::env::var("EVENT_SLUG").ok();
-    let token_ids_legacy: Vec<String> = std::env::var("TOKEN_IDS")
-        .unwrap_or_else(|_| "".into())
-        .split(',')
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect();
+    let redis_client = SharedRedisClient::new(&redis_url)?;
 
     // Create the supervisor for raw message ingestion
     let mut supervisor = Supervisor::new(nats_client.clone(), 50);
 
-    // Subscribe based on configuration
-    if let Some(slug) = &event_slug {
-        // New mode: fetch token mappings from Redis
-        info!("Using EVENT_SLUG mode: {}:{}", SERVICE_NAME, slug);
-        let mappings = fetch_token_mappings_from_redis(&redis_url, SERVICE_NAME, slug).await?;
+    // Fetch all token mappings from all events in Redis for this platform
+    info!("Fetching all events for platform '{}' from Redis...", SERVICE_NAME);
+    let mappings = fetch_all_token_mappings_from_redis(&redis_client, SERVICE_NAME).await?;
 
-        if mappings.is_empty() {
-            warn!(
-                "No token mappings found for event '{}:{}'. Make sure event_service has fetched the event first.",
-                SERVICE_NAME, slug
-            );
-        } else {
-            supervisor.subscribe_with_mappings(mappings).await?;
-        }
-    } else if !token_ids_legacy.is_empty() {
-        // Legacy mode: use TOKEN_IDS directly
-        info!(
-            "Using legacy TOKEN_IDS mode with {} tokens",
-            token_ids_legacy.len()
+    if mappings.is_empty() {
+        warn!(
+            "No token mappings found for platform '{}'. Make sure event_service has fetched events first.",
+            SERVICE_NAME
         );
-        supervisor.subscribe(token_ids_legacy).await?;
     } else {
-        warn!("No EVENT_SLUG or TOKEN_IDS provided. Starting without subscriptions.");
+        supervisor.subscribe_with_mappings(mappings).await?;
     }
 
     // Create the normalizer service with Polymarket adapter

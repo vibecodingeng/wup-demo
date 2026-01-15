@@ -179,19 +179,19 @@ gateway           ← depends on normalizer (for schema types), nats_client
 
 ## Environment Variables
 
-| Variable                | Service                                      | Default                   | Description                            |
-| ----------------------- | -------------------------------------------- | ------------------------- | -------------------------------------- |
-| `NATS_URL`              | all                                          | `nats://localhost:4222`   | NATS server                            |
-| `REDIS_URL`             | aggregator, event_service, orderbook_service | `redis://localhost:6379`  | Redis server                           |
-| `METRICS_PORT`          | all                                          | 9090/9091/9092/9093       | Prometheus metrics                     |
-| `HTTP_PORT`             | orderbook_service, event_service             | 8080/8081                 | HTTP API                               |
-| `REFRESH_INTERVAL_SECS` | event_service                                | `60`                      | Event refresh interval                 |
-| `EVENT_SLUG`            | aggregator                                   | -                         | Event to subscribe                     |
-| `NATS_SUBJECT`          | orderbook_service                            | `normalized.polymarket.>` | NATS subscription                      |
-| `PUBLISH_CHANGES`       | orderbook_service                            | `false`                   | Publish changes to NATS for gateway    |
-| `WS_PORT`               | gateway                                      | `8082`                    | WebSocket server port                  |
-| `ORDERBOOK_SERVICE_URL` | gateway                                      | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots) |
-| `RUST_LOG`              | all                                          | `info`                    | Log level                              |
+| Variable                | Service                                      | Default                   | Description                              |
+| ----------------------- | -------------------------------------------- | ------------------------- | ---------------------------------------- |
+| `NATS_URL`              | all                                          | `nats://localhost:4222`   | NATS server                              |
+| `REDIS_URL`             | aggregator, event_service, orderbook_service | `redis://localhost:6379`  | Redis server                             |
+| `METRICS_PORT`          | all                                          | 9090/9091/9092/9093       | Prometheus metrics                       |
+| `HTTP_PORT`             | orderbook_service, event_service             | 8080/8081                 | HTTP API                                 |
+| `REFRESH_INTERVAL_SECS` | event_service                                | `60`                      | Event refresh interval                   |
+| `EVENT_SLUG`            | event_service                                | -                         | Initial event to fetch on startup        |
+| `NATS_SUBJECT`          | orderbook_service                            | `normalized.polymarket.>` | NATS subscription                        |
+| `PUBLISH_CHANGES`       | orderbook_service                            | `false`                   | Publish changes to NATS for gateway      |
+| `WS_PORT`               | gateway                                      | `8082`                    | WebSocket server port                    |
+| `ORDERBOOK_SERVICE_URL` | gateway                                      | `http://localhost:8080`   | Orderbook HTTP API URL (for snapshots)   |
+| `RUST_LOG`              | all                                          | `info`                    | Log level                                |
 
 ## Performance Guidelines
 
