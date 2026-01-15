@@ -202,7 +202,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
         .map(|l| PriceLevel {
             price: l.price,
             size: l.size,
-            platform: platform.clone(),
         })
         .collect();
 
@@ -212,7 +211,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
         .map(|l| PriceLevel {
             price: l.price,
             size: l.size,
-            platform: platform.clone(),
         })
         .collect();
 
@@ -327,7 +325,6 @@ mod tests {
         assert_eq!(normalized.best_ask, Some("0.60".to_string()));
         // Verify price levels have platform field
         let bids = normalized.bids.as_ref().unwrap();
-        assert_eq!(bids[0].platform, "polymarket");
     }
 
     #[test]
