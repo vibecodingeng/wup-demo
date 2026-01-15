@@ -220,7 +220,6 @@ fn transform_book(book: RawBookMessage, normalized_at: &str) -> NormalizedOrderb
     let best_ask = asks.first().map(|l| l.price.clone());
 
     NormalizedOrderbook {
-        exchange: PolymarketAdapter::NAME.to_string(),
         platform,
         clob_token_id: book.asset_id,
         market_id: book.market,
@@ -256,7 +255,6 @@ fn transform_price_change(
     }
 
     let received_at = msg.received_at;
-    let platform = PolymarketAdapter::NAME.to_string();
 
     grouped
         .into_iter()
@@ -264,7 +262,11 @@ fn transform_price_change(
             let updates: Vec<OrderbookUpdate> = changes
                 .into_iter()
                 .map(|c| OrderbookUpdate {
-                    side: if c.side == "BUY" { Side::Buy } else { Side::Sell },
+                    side: if c.side == "BUY" {
+                        Side::Buy
+                    } else {
+                        Side::Sell
+                    },
                     price: c.price,
                     size: c.size,
                 })
@@ -273,8 +275,7 @@ fn transform_price_change(
             let (best_bid, best_ask) = best_prices.get(&clob_token_id).cloned().unwrap_or_default();
 
             NormalizedOrderbook {
-                exchange: PolymarketAdapter::NAME.to_string(),
-                platform: platform.clone(),
+                platform: PolymarketAdapter::NAME.to_string(),
                 clob_token_id,
                 market_id: msg.market.clone(),
                 message_type: OrderbookMessageType::Delta,
@@ -316,7 +317,6 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         let normalized = &result[0];
-        assert_eq!(normalized.exchange, "polymarket");
         assert_eq!(normalized.platform, "polymarket");
         assert_eq!(normalized.clob_token_id, "abc123");
         assert_eq!(normalized.message_type, OrderbookMessageType::Snapshot);
@@ -352,7 +352,6 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         let normalized = &result[0];
-        assert_eq!(normalized.exchange, "polymarket");
         assert_eq!(normalized.platform, "polymarket");
         assert_eq!(normalized.message_type, OrderbookMessageType::Delta);
         assert!(normalized.updates.is_some());

@@ -51,10 +51,7 @@ pub struct OrderbookUpdate {
 /// Normalized orderbook message.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NormalizedOrderbook {
-    /// Source exchange identifier.
-    pub exchange: String,
     /// Source platform identifier (e.g., "polymarket", "kalshi").
-    #[serde(default = "default_platform")]
     pub platform: String,
     /// CLOB token identifier (the tradeable token/outcome).
     pub clob_token_id: String,
