@@ -1,6 +1,6 @@
 //! WebSocket server handler using Axum.
 
-use crate::client::{ClientRegistry, ClientState};
+use crate::client::{ClientRegistry, ClientState, CLIENT_CHANNEL_BUFFER_SIZE};
 use crate::error::{GatewayError, Result};
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::router::ChangeRouter;
@@ -60,8 +60,9 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
     // Split the socket into sender and receiver
     let (mut ws_tx, mut ws_rx) = socket.split();
 
-    // Create unbounded channel for outgoing messages
-    let (tx, mut rx) = mpsc::unbounded_channel::<Message>();
+    // Create bounded channel for outgoing messages
+    // OPTIMIZATION: Prevents OOM with slow clients
+    let (tx, mut rx) = mpsc::channel::<Message>(CLIENT_CHANNEL_BUFFER_SIZE);
 
     // Create client state
     let client = Arc::new(ClientState::new(tx));
@@ -116,7 +117,8 @@ async fn handle_socket(socket: WebSocket, state: Arc<AppState>) {
 
             // Send ping periodically
             _ = ping_interval.tick() => {
-                if client.tx.send(Message::Ping(vec![].into())).is_err() {
+                if client.tx.try_send(Message::Ping(vec![].into())).is_err() {
+                    // Client buffer full or disconnected
                     break;
                 }
             }
@@ -153,7 +155,7 @@ async fn handle_message(
             client.update_ping();
             client
                 .tx
-                .send(Message::Pong(data))
+                .try_send(Message::Pong(data))
                 .map_err(|_| GatewayError::ChannelSend)?;
             Ok(())
         }
