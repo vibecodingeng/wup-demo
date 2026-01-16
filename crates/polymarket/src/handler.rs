@@ -1,4 +1,11 @@
 //! Polymarket WebSocket handler implementation.
+//!
+//! This handler receives raw WebSocket messages from Polymarket and:
+//! 1. Injects received_at timestamp
+//! 2. Normalizes inline using PolymarketAdapter
+//! 3. Publishes normalized messages directly to NATS
+//!
+//! This eliminates the intermediate raw stream and NormalizerService hop.
 
 use async_trait::async_trait;
 use chrono::Utc;
@@ -10,6 +17,7 @@ use external_services::polymarket::{
 };
 use metrics::counter;
 use nats_client::NatsClient;
+use normalizer::{AdapterConfig, ExchangeAdapter, PolymarketAdapter};
 use std::collections::HashMap;
 use std::sync::RwLock;
 use tracing::{debug, info, warn};
@@ -19,6 +27,8 @@ pub const MAX_SUBSCRIPTIONS_PER_CONNECTION: usize = MAX_SUBSCRIPTIONS;
 
 /// Polymarket WebSocket handler.
 /// Implements the WsHandler trait for processing market data.
+///
+/// Performs inline normalization - no separate NormalizerService needed.
 pub struct PolymarketHandler {
     /// Token ID to mapping (event_slug, market_id).
     token_mappings: RwLock<HashMap<String, (String, String)>>,
@@ -28,6 +38,10 @@ pub struct PolymarketHandler {
     nats_client: NatsClient,
     /// Worker ID for logging.
     worker_id: String,
+    /// Normalizer adapter for inline transformation.
+    adapter: PolymarketAdapter,
+    /// Adapter configuration for output subjects.
+    adapter_config: AdapterConfig,
 }
 
 impl PolymarketHandler {
@@ -48,21 +62,42 @@ impl PolymarketHandler {
             );
         }
 
+        // Initialize normalizer adapter for inline transformation
+        let adapter = PolymarketAdapter::new();
+        let adapter_config = AdapterConfig {
+            source_stream: String::new(), // Not used for inline normalization
+            filter_subject: String::new(),
+            dest_stream: "POLYMARKET_NORMALIZED".to_string(),
+            output_subject_prefix: "normalized.polymarket".to_string(),
+        };
+
         Self {
             token_mappings: RwLock::new(token_map),
             subscribed_ids: RwLock::new(ids),
             nats_client,
             worker_id,
+            adapter,
+            adapter_config,
         }
     }
 
     /// Create a new Polymarket handler (legacy - uses default subject format).
     pub fn new(initial_ids: Vec<String>, nats_client: NatsClient, worker_id: String) -> Self {
+        let adapter = PolymarketAdapter::new();
+        let adapter_config = AdapterConfig {
+            source_stream: String::new(),
+            filter_subject: String::new(),
+            dest_stream: "POLYMARKET_NORMALIZED".to_string(),
+            output_subject_prefix: "normalized.polymarket".to_string(),
+        };
+
         Self {
             token_mappings: RwLock::new(HashMap::new()),
             subscribed_ids: RwLock::new(initial_ids),
             nats_client,
             worker_id,
+            adapter,
+            adapter_config,
         }
     }
 
@@ -103,34 +138,30 @@ impl PolymarketHandler {
         }
     }
 
-    /// Extract asset_id from a market event message (single object).
-    fn extract_asset_id_from_value(value: &serde_json::Value) -> Option<String> {
-        value.get("asset_id").and_then(|v| v.as_str()).map(String::from)
-    }
+    /// Inject received_at timestamp into raw JSON string.
+    /// This is faster than parsing + modifying + serializing.
+    ///
+    /// For objects: `{"event_type":...}` → `{"received_at":123,"event_type":...}`
+    /// For arrays: `[{...}]` → `[{"received_at":123,...}]` (injects into each object)
+    fn inject_received_at(msg: &str, received_at: i64) -> String {
+        let timestamp_field = format!("\"received_at\":{},", received_at);
 
-    /// Build NATS subject for the message.
-    /// Format: market.polymarket.{event_slug}.{market_id}.{clob_token_id}
-    fn build_subject(&self, asset_id: &str) -> String {
-        let token_map = self.token_mappings.read().unwrap();
-
-        if let Some((event_slug, market_id)) = token_map.get(asset_id) {
-            format!("market.polymarket.{}.{}.{}", event_slug, market_id, asset_id)
+        if msg.trim_start().starts_with('[') {
+            // Array: inject into each object
+            msg.replace("{\"", &format!("{{\"received_at\":{},\"", received_at))
         } else {
-            // Fallback without event context
-            format!("market.polymarket.unknown.unknown.{}", asset_id)
+            // Single object: inject at start
+            if let Some(pos) = msg.find('{') {
+                let mut result = String::with_capacity(msg.len() + timestamp_field.len());
+                result.push_str(&msg[..=pos]);
+                result.push_str(&timestamp_field);
+                result.push_str(&msg[pos + 1..]);
+                result
+            } else {
+                msg.to_string()
+            }
         }
     }
-
-    /// Add received_at timestamp to a JSON value.
-    fn add_received_timestamp_to_value(value: &mut serde_json::Value, received_at: i64) {
-        if let Some(obj) = value.as_object_mut() {
-            obj.insert(
-                "received_at".to_string(),
-                serde_json::Value::Number(received_at.into()),
-            );
-        }
-    }
-
 }
 
 #[async_trait]
@@ -154,51 +185,45 @@ impl WsHandler for PolymarketHandler {
 
         debug!("[{}] Received message: {}", self.worker_id, msg);
 
-        // Parse the message as JSON
-        let value: serde_json::Value = match serde_json::from_str(msg) {
-            Ok(v) => v,
+        // Inject received_at into raw JSON (fast string manipulation, no parse)
+        let payload_with_timestamp = Self::inject_received_at(msg, received_at);
+
+        // INLINE NORMALIZATION: Parse and transform in one step
+        // This eliminates the separate NormalizerService and NATS hop
+        let normalized = match self.adapter.parse_and_transform(&payload_with_timestamp) {
+            Ok(results) => results,
             Err(e) => {
-                warn!("[{}] Failed to parse message as JSON: {}", self.worker_id, e);
+                debug!("[{}] Failed to normalize message: {}", self.worker_id, e);
+                counter!("aggregator_normalize_errors_total", "platform" => "polymarket").increment(1);
                 return Ok(());
             }
         };
 
-        // Handle arrays by processing each element separately
-        let messages: Vec<serde_json::Value> = if value.is_array() {
-            value.as_array().cloned().unwrap_or_default()
-        } else {
-            vec![value]
-        };
+        if normalized.is_empty() {
+            debug!("[{}] No normalized messages produced (unknown event type)", self.worker_id);
+            return Ok(());
+        }
 
-        for mut msg_value in messages {
-            // Add received_at timestamp
-            Self::add_received_timestamp_to_value(&mut msg_value, received_at);
+        // Publish each normalized message directly to NATS
+        for orderbook in normalized {
+            let subject = self.adapter.build_output_subject(&self.adapter_config, &orderbook);
 
-            // Extract asset_id for subject routing
-            let asset_id = Self::extract_asset_id_from_value(&msg_value);
-
-            // Build subject based on token mapping
-            let subject = match &asset_id {
-                Some(aid) => self.build_subject(aid),
-                None => "market.polymarket.raw".to_string(),
-            };
-
-            // Serialize the message
-            let payload = match serde_json::to_string(&msg_value) {
-                Ok(s) => s,
+            // Serialize normalized message
+            let payload = match serde_json::to_vec(&orderbook) {
+                Ok(p) => p,
                 Err(e) => {
-                    warn!("[{}] Failed to serialize message: {}", self.worker_id, e);
+                    warn!("[{}] Failed to serialize normalized message: {}", self.worker_id, e);
                     continue;
                 }
             };
 
-            // Publish to NATS (fast/fire-and-forget for low latency)
+            // Publish to normalized subject (skips the raw stream entirely)
             self.nats_client
                 .publish_fast(&subject, bytes::Bytes::from(payload))
                 .await
                 .map_err(|e| common::error::Error::Generic(e.to_string()))?;
 
-            counter!("aggregator_messages_published_total", "platform" => "polymarket").increment(1);
+            counter!("aggregator_messages_normalized_total", "platform" => "polymarket").increment(1);
         }
 
         Ok(())

@@ -1,4 +1,10 @@
 //! Main entry point for the betting aggregator.
+//!
+//! The aggregator connects to Polymarket WebSocket, normalizes messages inline,
+//! and publishes directly to normalized.polymarket.* subjects.
+//!
+//! Normalization is done inline in the PolymarketHandler - no separate
+//! NormalizerService needed.
 
 mod supervisor;
 
@@ -7,10 +13,8 @@ use external_services::polymarket::TokenMapping;
 use external_services::SharedRedisClient;
 use metrics_exporter_prometheus::PrometheusBuilder;
 use nats_client::NatsClient;
-use normalizer::{AdapterConfig, NormalizerService, PolymarketAdapter};
 use supervisor::Supervisor;
-use tokio::sync::mpsc;
-use tracing::{error, info, warn};
+use tracing::{info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Service name for Polymarket.
@@ -110,8 +114,8 @@ async fn main() -> Result<()> {
     let nats_url = std::env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".into());
     let nats_client = NatsClient::connect(&nats_url).await?;
 
-    // Create service-specific streams
-    nats_client.ensure_market_stream(SERVICE_NAME).await?;
+    // Create normalized stream (needed by OrderbookService)
+    // Note: market stream no longer needed - we publish normalized directly
     nats_client.ensure_normalized_stream(SERVICE_NAME).await?;
 
     // Get Redis URL and connect
@@ -119,7 +123,8 @@ async fn main() -> Result<()> {
         std::env::var("REDIS_URL").unwrap_or_else(|_| "redis://localhost:6379".into());
     let redis_client = SharedRedisClient::new(&redis_url)?;
 
-    // Create the supervisor for raw message ingestion
+    // Create the supervisor for WebSocket connections
+    // Handler now normalizes inline and publishes to normalized.polymarket.*
     let mut supervisor = Supervisor::new(nats_client.clone(), 50);
 
     // Fetch all token mappings from all events in Redis for this platform
@@ -135,45 +140,10 @@ async fn main() -> Result<()> {
         supervisor.subscribe_with_mappings(mappings).await?;
     }
 
-    // Create the normalizer service with Polymarket adapter
-    let (normalizer_shutdown_tx, normalizer_shutdown_rx) = mpsc::channel(1);
-
-    let normalizer_nats = NatsClient::connect(&nats_url).await?;
-    let polymarket_adapter = PolymarketAdapter::new();
-
-    // Normalizer config:
-    // - Subscribes to: market.polymarket.>
-    // - Publishes to: normalized.polymarket.{event_slug}.{market_id}.{token_id}
-    let config = AdapterConfig {
-        source_stream: format!("{}_MARKET", SERVICE_NAME.to_uppercase()),
-        filter_subject: format!("market.{}.>", SERVICE_NAME),
-        dest_stream: format!("{}_NORMALIZED", SERVICE_NAME.to_uppercase()),
-        output_subject_prefix: format!("normalized.{}", SERVICE_NAME),
-    };
-
-    let normalizer = NormalizerService::new(
-        polymarket_adapter,
-        normalizer_nats,
-        config,
-        normalizer_shutdown_rx,
-    );
-
-    // Spawn normalizer task
-    let normalizer_handle = tokio::spawn(async move {
-        if let Err(e) = normalizer.run().await {
-            error!("Normalizer failed: {:?}", e);
-        }
-    });
-
-    info!("Normalizer service spawned");
+    info!("Aggregator running with inline normalization (no separate NormalizerService)");
 
     // Run the supervisor (this blocks until shutdown)
     supervisor.run().await?;
-
-    // Shutdown normalizer
-    info!("Shutting down normalizer...");
-    let _ = normalizer_shutdown_tx.send(()).await;
-    let _ = normalizer_handle.await;
 
     Ok(())
 }

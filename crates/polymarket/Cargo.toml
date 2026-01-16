@@ -8,6 +8,7 @@ license.workspace = true
 common = { workspace = true }
 nats_client = { workspace = true }
 external_services = { workspace = true }
+normalizer = { workspace = true }
 tokio = { workspace = true }
 tokio-tungstenite = { workspace = true }
 futures = { workspace = true }
