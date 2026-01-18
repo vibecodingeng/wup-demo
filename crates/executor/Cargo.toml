@@ -1,0 +1,55 @@
+[package]
+name = "executor"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "executor"
+path = "src/main.rs"
+
+[dependencies]
+# Internal crates
+nats_client = { workspace = true }
+common = { workspace = true }
+
+# Platform SDKs and Crypto
+polymarket-client-sdk = "0.3"
+k256 = "0.13"
+sha2 = "0.10"
+hmac = "0.12"
+hex = "0.4"
+rand = "0.8"
+base64 = "0.22"
+
+# Async runtime
+tokio = { workspace = true }
+async-trait = { workspace = true }
+futures = { workspace = true }
+
+# Web framework
+axum = { workspace = true }
+tower-http = { workspace = true }
+
+# Concurrency
+dashmap = { workspace = true }
+rust_decimal = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Error handling
+thiserror = { workspace = true }
+anyhow = { workspace = true }
+
+# Logging & metrics
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+metrics = { workspace = true }
+metrics-exporter-prometheus = { workspace = true }
+
+# Utils
+dotenvy = { workspace = true }
+chrono = { workspace = true }
+reqwest = { workspace = true }

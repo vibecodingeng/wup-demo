@@ -10,6 +10,7 @@ members = [
   "crates/external_services",
   "crates/event_service",
   "crates/gateway",
+  "crates/executor",
 ]
 
 [workspace.package]
@@ -85,3 +86,4 @@ orderbook_service = { path = "crates/orderbook_service" }
 external_services = { path = "crates/external_services" }
 event_service = { path = "crates/event_service" }
 gateway = { path = "crates/gateway" }
+executor = { path = "crates/executor" }
